@@ -277,48 +277,37 @@ async function makeWeek(interaction, week, role) {
 // ---------- Preload from bundled local file (no network) ----------
 const NFL_2025_BUNDLED = path.join(DATA_DIR, 'nfl_2025.json');
 
-async function readBundled2025() {
-  // Ensure file exists
-  const exists = await fs.pathExists(NFL_2025_BUNDLED);
-  if (!exists) {
-    throw new Error(
-      `Missing file: ${NFL_2025_BUNDLED}. ` +
-      `Add your full 2025 schedule JSON there (see README).`
-    );
-  }
+async function readBundled2025Raw() {
+  const abs = path.resolve(NFL_2025_BUNDLED);
+  const exists = await fs.pathExists(abs);
+  if (!exists) throw new Error(`Missing ${abs}`);
 
-  // Parse JSON
-  const json = await fs.readJSON(NFL_2025_BUNDLED);
-
-  // Basic validation
-  if (!json || typeof json !== 'object' || !json.weeks || typeof json.weeks !== 'object') {
-    throw new Error(`Invalid schedule format in ${NFL_2025_BUNDLED}: expected { weeks: { "1": [ ... ] } }`);
-  }
-
-  // Optional: quick sanity log to help debugging
-  const weekKeys = Object.keys(json.weeks).sort((a, b) => Number(a) - Number(b));
-  const summary = weekKeys.map(w => `${w}:${Array.isArray(json.weeks[w]) ? json.weeks[w].length : 0}`).join(' ');
-  console.log(`📦 Loaded nfl_2025.json weeks=${weekKeys.length}  gamesByWeek=${summary}`);
-
-  return json;
+  const text = await fs.readFile(abs, 'utf8');
+  // quick sanity: count how many games by scanning for `"home":`
+  const approxGames = (text.match(/"home"\s*:/g) || []).length;
+  console.log(`📄 nfl_2025.json @ ${abs}  bytes=${text.length}  approxGames=${approxGames}`);
+  return JSON.parse(text);
 }
 
 async function preloadFromBundled2025(guildId) {
-  const json = await readBundled2025();
+  const json = await readBundled2025Raw();
 
-  const data = SCHEDULES.get(guildId) || { source: null, weeks: {} };
-  data.source = 'nfl_2025';
-  data.weeks = json.weeks || {};
+  if (!json || !json.weeks || typeof json.weeks !== 'object') {
+    throw new Error(`Invalid format in nfl_2025.json (expected { weeks: { "1": [ ... ] } })`);
+  }
+
+  // Build a concise summary like 1:16 2:14 ...
+  const weekKeys = Object.keys(json.weeks).sort((a, b) => Number(a) - Number(b));
+  const summary = weekKeys.map(w => `${w}:${Array.isArray(json.weeks[w]) ? json.weeks[w].length : 0}`).join(' ');
+  console.log(`📦 Loaded weeks=${weekKeys.length}  gamesByWeek=${summary}`);
+
+  // Forcefully replace any cached schedule for this guild
+  const data = { source: 'nfl_2025', weeks: json.weeks };
   SCHEDULES.set(guildId, data);
-
   await saveSchedule(guildId);
-  return {
-    ok: true,
-    msg: `Preloaded 2025 schedule from local file (data/nfl_2025.json). ` +
-         `Weeks loaded: ${Object.keys(data.weeks).length}.`
-  };
-}
 
+  return { ok: true, msg: `Preloaded 2025 from data/nfl_2025.json (weeks=${weekKeys.length}).` };
+}
 // ---------- Commands ----------
 const commands = [
   {

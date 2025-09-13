@@ -473,97 +473,85 @@ client.once('clientReady', async () => {
 );
 });
 
-// Interactions
+// ===================== Interactions =====================
 client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isChatInputCommand() && !interaction.isModalSubmit()) return;
+
+  // Always ensure the schedule is loaded for this guild
+  const guildId = interaction.guildId;
+  await loadSchedule(guildId);
+
+  // ---------- Slash commands ----------
   if (interaction.isChatInputCommand()) {
-    const guildId = interaction.guildId;
-    await loadSchedule(guildId);
+    // /setup-season
+    if (interaction.commandName === 'setup-season') {
+      const source  = interaction.options.getString('source', true);
+      const doPurge = interaction.options.getBoolean('purge') || false;
 
- if (interaction.commandName === 'setup-season') {
-  const source = interaction.options.getString('source', true);
-  const doPurge = interaction.options.getBoolean('purge') || false;
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      try {
+        if (source === 'nfl_2025') {
+          const res = await preloadFromBundled2025(guildId);
+          await interaction.editReply({ content: `📅 Source set to **nfl_2025**. ${res.msg}` });
+          return;
+        }
 
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        // manual → clear out any preloaded games
+        const data = SCHEDULES.get(guildId) || { source: null, weeks: {} };
+        data.source = 'manual';
+        data.weeks  = {};
+        SCHEDULES.set(guildId, data);
+        await saveSchedule(guildId);
 
-  try {
-    if (source === 'nfl_2025') {
-      const res = await preloadFromBundled2025(interaction.guildId);
-      await interaction.editReply({ content: `📅 Source set to **nfl_2025**. ${res.msg}` });
+        let msg = '📝 Source set to **manual**. Preloaded games cleared.';
+        if (doPurge) {
+          const res = await purgeAllWeekCategories(interaction.guild);
+          msg += ` 🧹 Deleted **${res.deleted}** week categories (errors: ${res.errors}).`;
+        }
+        await interaction.editReply({ content: msg });
+      } catch (e) {
+        await interaction.editReply({ content: `❌ Error: ${e?.message || e}` });
+      }
       return;
     }
 
-    // → manual: clear all weeks
-    const data = SCHEDULES.get(interaction.guildId) || { source: null, weeks: {} };
-    data.source = 'manual';
-    data.weeks = {};                    // << clear preloaded games
-    SCHEDULES.set(interaction.guildId, data);
-    await saveSchedule(interaction.guildId);
-
-    let msg = '📝 Source set to **manual**. Preloaded games cleared.';
-    if (doPurge) {
-      const res = await purgeAllWeekCategories(interaction.guild);
-      msg += ` 🧹 Deleted ${res.deleted} Week categories (skipped: ${res.skipped}, errors: ${res.errors}).`;
-    }
-    await interaction.editReply({ content: msg });
-  } catch (e) {
-    await interaction.editReply({ content: `❌ ${e?.message || e}` });
-  }
-  return;
-}
-
-    async function purgeAllWeekCategories(guild) {
-  const cats = guild.channels.cache.filter(
-    c => c.type === ChannelType.GuildCategory && /^week\s+\d+$/i.test(c.name)
-  );
-
-  const results = { deleted: 0, errors: 0 };
-  for (const cat of cats.values()) {
-    try {
-      // delete all children first
-      const children = guild.channels.cache.filter(ch => ch.parentId === cat.id);
-      for (const ch of children.values()) {
-        try { await ch.delete('Season reset (manual source)'); }
-        catch { results.errors++; }
-      }
-      await cat.delete('Season reset (manual source)');
-      results.deleted++;
-    } catch {
-      results.errors++;
-    }
-  }
-  return results;
-}
-
+    // /import-schedule
     if (interaction.commandName === 'import-schedule') {
-      const text = interaction.options.getString('schedule_text', true);
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const text = interaction.options.getString('schedule_text', true);
       const lines = text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+
       const data = SCHEDULES.get(guildId) || { source: null, weeks: {} };
       let added = 0, bad = 0;
+
       for (const line of lines) {
         const parts = line.split(',').map(s => s.trim());
         if (parts.length < 3) { bad++; continue; }
-        const week = parseInt(parts[0], 10);
-        const homeIn = parts[1];
-        const awayIn = parts[2];
-        if (!Number.isInteger(week)) { bad++; continue; }
-        if (!data.weeks[week]) data.weeks[week] = [];
-        const { canonical: home } = normalizeTeam(homeIn);
-        const { canonical: away } = normalizeTeam(awayIn);
-        const exists = data.weeks[week].some(m => m.home === home && m.away === away);
-        if (!exists) { data.weeks[week].push({ home, away }); added++; }
+        const wk = String(Number(parts[0]));
+        if (!wk || wk === 'NaN') { bad++; continue; }
+
+        const { canonical: home } = normalizeTeam(parts[1]);
+        const { canonical: away } = normalizeTeam(parts[2]);
+
+        data.weeks[wk] = data.weeks[wk] || [];
+        if (!data.weeks[wk].some(m => m.home === home && m.away === away)) {
+          data.weeks[wk].push({ home, away });
+          added++;
+        }
       }
+
       SCHEDULES.set(guildId, data);
       await saveSchedule(guildId);
       await interaction.editReply(`✅ Imported. Added ${added} match(es). Skipped ${bad} malformed line(s).`);
       return;
     }
 
+    // /make-week
     if (interaction.commandName === 'make-week') {
       const week = interaction.options.getInteger('week', true);
       const role = interaction.options.getRole('private_to_role') || null;
 
-      // 🔒 Monetization gate: allow up to FREE_WEEK_LIMIT free; week > limit requires Pro
+      // Pro gate by week number
       const isPro = await guildHasPro(client, guildId);
       if (!isPro && week > FREE_WEEK_LIMIT) {
         await sendBuyButton(
@@ -578,6 +566,7 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
+    // /add-match (adds and immediately builds)
     if (interaction.commandName === 'add-match') {
       const week = interaction.options.getInteger('week', true);
       const home = interaction.options.getString('home', true);
@@ -587,11 +576,11 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       addMatch(guildId, week, home, away);
       await saveSchedule(guildId);
-      // No gate here—adding to the schedule is fine; creation is gated in /make-week
       await makeWeek(interaction, week, role);
       return;
     }
 
+    // /manual-add → opens modal
     if (interaction.commandName === 'manual-add') {
       const modal = new ModalBuilder()
         .setCustomId('manualAddModal')
@@ -615,99 +604,86 @@ client.on('interactionCreate', async (interaction) => {
         .setStyle(TextInputStyle.Short)
         .setRequired(true);
 
-      modal.addComponents(
+      await interaction.showModal(modal.addComponents(
         new ActionRowBuilder().addComponents(weekInput),
         new ActionRowBuilder().addComponents(awayInput),
-        new ActionRowBuilder().addComponents(homeInput)
-      );
-
-      await interaction.showModal(modal);
+        new ActionRowBuilder().addComponents(homeInput),
+      ));
       return;
     }
 
-    
-
+    // /cleanup-week
     if (interaction.commandName === 'cleanup-week') {
-      const week = interaction.options.getInteger('week', true);
+      const week    = interaction.options.getInteger('week', true);
       const confirm = interaction.options.getBoolean('confirm', true);
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
       if (!confirm) {
         await interaction.editReply('❌ Deletion not confirmed.');
         return;
       }
+
       const cat = interaction.guild.channels.cache.find(
         c => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === `week ${week}`.toLowerCase()
       );
+
       if (!cat) {
         await interaction.editReply('⚠️ No category found for that week.');
         return;
       }
+
       const children = interaction.guild.channels.cache.filter(c => c.parentId === cat.id);
-      for (const [, ch] of children) await ch.delete('Cleanup by /cleanup-week');
-      await cat.delete('Cleanup by /cleanup-week');
+      for (const [, ch] of children) {
+        try { await ch.delete('Cleanup by /cleanup-week'); } catch {/* ignore */}
+      }
+      try { await cat.delete('Cleanup by /cleanup-week'); } catch {/* ignore */}
       await interaction.editReply(`🗑️ Deleted Week ${week}.`);
       return;
     }
 
+    // /upgrade
     if (interaction.commandName === 'upgrade') {
       await sendBuyButton(interaction);
       return;
     }
-  }
 
-    // --- manual: clear all preloaded games for this guild ---
-    const data = SCHEDULES.get(interaction.guildId) || { source: null, weeks: {} };
-    data.source = 'manual';
-    data.weeks = {};                              // <<< wipe preloaded games
-    SCHEDULES.set(interaction.guildId, data);
-    await saveSchedule(interaction.guildId);
-
-    let msg = '📝 Source set to **manual**. Existing preloaded games cleared. Use **/manual-add** or **/add-match**.';
-    if (doPurge) {
-      const res = await purgeAllWeekCategories(interaction.guild);
-      msg += `\n🧹 Purge: deleted **${res.deleted}** Week categories (errors: ${res.errors}).`;
-    }
-
-    await interaction.editReply({ content: msg });
-  } catch (e) {
-    await interaction.editReply({ content: `❌ Error: ${e?.message || e}` });
-  }
-  return;
-}
-  
-if (interaction.commandName === 'debug-week') {
-  const week = interaction.options.getInteger('week', true);
-  const data = SCHEDULES.get(interaction.guildId) || { weeks: {} };
-  const games = data.weeks?.[week] || [];
-  await interaction.reply({
-    content: `Week ${week}: I see **${games.length}** game(s).\n` +
-             games.slice(0, 10).map(g => `• ${g.home} vs ${g.away}`).join('\n') +
-             (games.length > 10 ? `\n… (${games.length - 10} more)` : ''),
-    flags: MessageFlags.Ephemeral
-  });
-  return;
-}
-  // Modal submit handler
-  if (interaction.isModalSubmit() && interaction.customId === 'manualAddModal') {
-    const guildId = interaction.guildId;
-    await loadSchedule(guildId);
-    const week = parseInt(interaction.fields.getTextInputValue('week'), 10);
-    const away = interaction.fields.getTextInputValue('away');
-    const home = interaction.fields.getTextInputValue('home');
-    if (!Number.isInteger(week) || week <= 0) {
-    await interaction.reply({ 
-    content: 'Week must be a positive number.', 
-    flags: MessageFlags.Ephemeral 
-});
+    // /debug-week
+    if (interaction.commandName === 'debug-week') {
+      const wk = String(Number(interaction.options.getInteger('week', true)));
+      const data  = SCHEDULES.get(guildId) || { weeks: {} };
+      const games = data.weeks?.[wk] || [];
+      await interaction.reply({
+        content:
+          `Guild: \`${guildId}\`\n` +
+          `Weeks present: [${Object.keys(data.weeks || {}).join(', ')}]\n` +
+          `Week ${wk}: I see **${games.length}** game(s).\n` +
+          (games.slice(0, 10).map(g => `• ${g.home} vs ${g.away}`).join('\n') || ''),
+        flags: MessageFlags.Ephemeral
+      });
       return;
     }
-    addMatch(guildId, week, home, away);
+  }
+
+  // ---------- Modal submit ----------
+  if (interaction.isModalSubmit() && interaction.customId === 'manualAddModal') {
+    const wk   = String(Number(interaction.fields.getTextInputValue('week')));
+    const away = interaction.fields.getTextInputValue('away');
+    const home = interaction.fields.getTextInputValue('home');
+
+    if (!wk || wk === 'NaN') {
+      await interaction.reply({ content: 'Week must be a positive number.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    addMatch(guildId, wk, home, away);
     await saveSchedule(guildId);
-await interaction.reply({ 
-  content: `✅ Added to Week ${week}: ${titleCase(away)} @ ${titleCase(home)}. Use /make-week to build channels.`, 
-  flags: MessageFlags.Ephemeral 
-});
+    await interaction.reply({
+      content: `✅ Added to Week ${wk}: ${titleCase(away)} @ ${titleCase(home)}. Use /make-week to build channels.`,
+      flags: MessageFlags.Ephemeral
+    });
+    return;
   }
 });
 
+// keep this as the last line
 client.login(token);

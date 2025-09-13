@@ -23,6 +23,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 const ROOT_DIR = __dirname;
 const DATA_DIR = path.join(ROOT_DIR, 'data');
+import { ChannelType } from 'discord.js';
+
 
 // near imports (top of file)
 import { setGlobalDispatcher, Agent } from 'undici';
@@ -316,22 +318,28 @@ async function preloadFromBundled2025(guildId) {
 // ---------- Commands ----------
 const commands = [
   {
-    name: 'setup-season',
-    description: 'Choose a season source.',
-    options: [
-      {
-        type: 3,
-        name: 'source',
-        description: 'nfl_2025 (preloaded from local file) or manual',
-        required: true,
-        choices: [
-          { name: 'nfl_2025', value: 'nfl_2025' },
-          { name: 'manual', value: 'manual' }
-        ]
-      }
-    ],
-    default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
-  },
+  name: 'setup-season',
+  description: 'Choose a season source.',
+  options: [
+    {
+      type: 3,
+      name: 'source',
+      description: 'nfl_2025 (preloaded from local file) or manual',
+      required: true,
+      choices: [
+        { name: 'nfl_2025', value: 'nfl_2025' },
+        { name: 'manual', value: 'manual' }
+      ]
+    },
+    {
+      type: 5,
+      name: 'purge',
+      description: 'Also delete existing Week categories/channels',
+      required: false
+    }
+  ],
+  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+},
   {
     name: 'import-schedule',
     description: 'Paste CSV lines: week,home,away',
@@ -459,6 +467,28 @@ client.on('interactionCreate', async (interaction) => {
   }
   return;
 }
+    async function purgeAllWeekCategories(guild) {
+  const cats = guild.channels.cache.filter(
+    c => c.type === ChannelType.GuildCategory && /^week\s+\d+$/i.test(c.name)
+  );
+
+  const results = { deleted: 0, errors: 0 };
+  for (const cat of cats.values()) {
+    try {
+      // delete all children first
+      const children = guild.channels.cache.filter(ch => ch.parentId === cat.id);
+      for (const ch of children.values()) {
+        try { await ch.delete('Season reset (manual source)'); }
+        catch { results.errors++; }
+      }
+      await cat.delete('Season reset (manual source)');
+      results.deleted++;
+    } catch {
+      results.errors++;
+    }
+  }
+  return results;
+}
 
     if (interaction.commandName === 'import-schedule') {
       const text = interaction.options.getString('schedule_text', true);
@@ -580,6 +610,39 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
   }
+
+  if (interaction.commandName === 'setup-season') {
+  const source = interaction.options.getString('source', true);
+  const doPurge = interaction.options.getBoolean('purge') || false;
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  try {
+    if (source === 'nfl_2025') {
+      const res = await preloadFromBundled2025(interaction.guildId);
+      await interaction.editReply({ content: `📅 Source set to **nfl_2025**. ${res.msg}` });
+      return;
+    }
+
+    // --- manual: clear all preloaded games for this guild ---
+    const data = SCHEDULES.get(interaction.guildId) || { source: null, weeks: {} };
+    data.source = 'manual';
+    data.weeks = {};                              // <<< wipe preloaded games
+    SCHEDULES.set(interaction.guildId, data);
+    await saveSchedule(interaction.guildId);
+
+    let msg = '📝 Source set to **manual**. Existing preloaded games cleared. Use **/manual-add** or **/add-match**.';
+    if (doPurge) {
+      const res = await purgeAllWeekCategories(interaction.guild);
+      msg += `\n🧹 Purge: deleted **${res.deleted}** Week categories (errors: ${res.errors}).`;
+    }
+
+    await interaction.editReply({ content: msg });
+  } catch (e) {
+    await interaction.editReply({ content: `❌ Error: ${e?.message || e}` });
+  }
+  return;
+}
   
 if (interaction.commandName === 'debug-week') {
   const week = interaction.options.getInteger('week', true);

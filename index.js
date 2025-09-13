@@ -580,38 +580,39 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    // /manual-add → opens modal
-    if (interaction.commandName === 'manual-add') {
-      const modal = new ModalBuilder()
-        .setCustomId('manualAddModal')
-        .setTitle('Add Matchup');
+    // /manual-add → opens modal (SAFE VERSION)
+if (interaction.commandName === 'manual-add') {
+  const modal = new ModalBuilder()
+    .setCustomId('manualAddModal')
+    .setTitle('Add Matchup');
 
-      const weekInput = new TextInputBuilder()
-        .setCustomId('week')
-        .setLabel('Week number')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
+  const weekInput = new TextInputBuilder()
+    .setCustomId('week')
+    .setLabel('Week number')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
 
-      const awayInput = new TextInputBuilder()
-        .setCustomId('away')
-        .setLabel('Away team (name or abbrev)')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
+  const awayInput = new TextInputBuilder()
+    .setCustomId('away')
+    .setLabel('Away team (name or abbrev)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
 
-      const homeInput = new TextInputBuilder()
-        .setCustomId('home')
-        .setLabel('Home team (name or abbrev)')
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
+  const homeInput = new TextInputBuilder()
+    .setCustomId('home')
+    .setLabel('Home team (name or abbrev)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
 
-      await interaction.showModal(modal.addComponents(
-        new ActionRowBuilder().addComponents(weekInput),
-        new ActionRowBuilder().addComponents(awayInput),
-        new ActionRowBuilder().addComponents(homeInput),
-      ));
-      return;
-    }
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(weekInput),
+    new ActionRowBuilder().addComponents(awayInput),
+    new ActionRowBuilder().addComponents(homeInput)
+  );
 
+  await interaction.showModal(modal);
+  return;
+}
     // /cleanup-week
     if (interaction.commandName === 'cleanup-week') {
       const week    = interaction.options.getInteger('week', true);

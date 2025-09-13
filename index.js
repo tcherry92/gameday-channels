@@ -301,6 +301,22 @@ async function preloadFromBundled2025(guildId) {
     throw new Error(`Invalid format in nfl_2025.json (expected { weeks: { "1": [ ... ] } })`);
   }
 
+  async function preloadFromBundled2025(guildId, { force = false } = {}) {
+  const current = SCHEDULES.get(guildId);
+  if (current?.source === 'manual' && !force) {
+    return {
+      ok: false,
+      msg: 'Guild is in **manual** mode; not preloading. Use /setup-season source:nfl_2025 to switch.'
+    };
+  }
+
+  const json = await readBundled2025Raw(); // your validated reader
+  const data = { source: 'nfl_2025', weeks: json.weeks || {} };
+  SCHEDULES.set(guildId, data);
+  await saveSchedule(guildId);
+
+  return { ok: true, msg: `Preloaded 2025 from data/nfl_2025.json (weeks=${Object.keys(data.weeks).length}).` };
+}
   // Build a concise summary like 1:16 2:14 ...
   const weekKeys = Object.keys(json.weeks).sort((a, b) => Number(a) - Number(b));
   const summary = weekKeys.map(w => `${w}:${Array.isArray(json.weeks[w]) ? json.weeks[w].length : 0}`).join(' ');
@@ -417,12 +433,21 @@ async function registerCommands(clientId, attempt = 1) {
 
 client.once('clientReady', async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
-  // Autopreload from local 2025 file on startup
-  await loadSchedule(devGuildId).catch(() => {});
+
   for (const [guildId] of client.guilds.cache) {
-    await loadSchedule(guildId);
-    await preloadFromBundled2025(guildId);
+    // load saved schedule (if any)
+    const loaded = await loadSchedule(guildId).catch(() => null);
+
+    if (!loaded || !loaded.source) {
+      // default to manual with empty weeks
+      SCHEDULES.set(guildId, { source: 'manual', weeks: {} });
+      await saveSchedule(guildId);
+      console.log(`Initialized ${guildId} → source=manual, weeks=0`);
+    } else {
+      console.log(`Loaded ${guildId} → source=${loaded.source}, weeks=${Object.keys(loaded.weeks||{}).length}`);
+    }
   }
+
   await registerCommands(client.user.id).catch(console.error);
 });
 
@@ -434,37 +459,36 @@ client.on('interactionCreate', async (interaction) => {
 
  if (interaction.commandName === 'setup-season') {
   const source = interaction.options.getString('source', true);
-  // Ack immediately to avoid timeouts
+  const doPurge = interaction.options.getBoolean('purge') || false;
+
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   try {
     if (source === 'nfl_2025') {
       const res = await preloadFromBundled2025(interaction.guildId);
-      await safeEdit(interaction, {
-        content: `📅 Source set to **nfl_2025**. ${res.msg}`
-      });
-    } else {
-      const data = SCHEDULES.get(interaction.guildId) || { source: null, weeks: {} };
-      data.source = 'manual';
-      SCHEDULES.set(interaction.guildId, data);
-      await saveSchedule(interaction.guildId);
-      await safeEdit(interaction, {
-        content: '📝 Source set to **manual**. Use **/manual-add** or **/add-match** to enter games.'
-      });
+      await interaction.editReply({ content: `📅 Source set to **nfl_2025**. ${res.msg}` });
+      return;
     }
+
+    // → manual: clear all weeks
+    const data = SCHEDULES.get(interaction.guildId) || { source: null, weeks: {} };
+    data.source = 'manual';
+    data.weeks = {};                    // << clear preloaded games
+    SCHEDULES.set(interaction.guildId, data);
+    await saveSchedule(interaction.guildId);
+
+    let msg = '📝 Source set to **manual**. Preloaded games cleared.';
+    if (doPurge) {
+      const res = await purgeAllWeekCategories(interaction.guild);
+      msg += ` 🧹 Deleted ${res.deleted} Week categories (skipped: ${res.skipped}, errors: ${res.errors}).`;
+    }
+    await interaction.editReply({ content: msg });
   } catch (e) {
-    // Final fallback so the process never dies on a transient blip
-    const msg = (e && e.code === 'UND_ERR_SOCKET')
-      ? '⚠️ Temporary network hiccup. Try the command again.'
-      : `❌ Error: ${e?.message || e}`;
-    try {
-      await safeEdit(interaction, { content: msg });
-    } catch (_) {
-      console.error('Failed to send error message:', _);
-    }
+    await interaction.editReply({ content: `❌ ${e?.message || e}` });
   }
   return;
 }
+
     async function purgeAllWeekCategories(guild) {
   const cats = guild.channels.cache.filter(
     c => c.type === ChannelType.GuildCategory && /^week\s+\d+$/i.test(c.name)

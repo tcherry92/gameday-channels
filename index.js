@@ -414,20 +414,25 @@ const commands = [
 }
 ];
 
-async function registerCommands(clientId, attempt = 1) {
+async function registerCommandsAuto(appId, token, commands, devGuildId, attempt = 1) {
   try {
     const rest = new REST({ version: '10' }).setToken(token);
-    if (!devGuildId) {
-      console.warn('GUILD_ID not set; skipping guild command registration.');
-      return;
+
+    if (devGuildId) {
+      // Fast dev mode: only registers to your test guild
+      await rest.put(Routes.applicationGuildCommands(appId, devGuildId), { body: commands });
+      console.log('✅ Slash commands registered (guild).');
+    } else {
+      // Production: register globally
+      await rest.put(Routes.applicationCommands(appId), { body: commands });
+      console.log('🌍 Slash commands registered (global). May take up to 1 hour to propagate.');
     }
-    await rest.put(Routes.applicationGuildCommands(clientId, devGuildId), { body: commands });
-    console.log('✅ Slash commands registered (guild).');
+
   } catch (e) {
     const delay = Math.min(15000 * attempt, 60000);
-    console.warn(`Command registration failed (attempt ${attempt}). Retrying in ${delay/1000}s`);
+    console.warn(`Command registration failed (attempt ${attempt}). Retrying in ${delay / 1000}s`);
     console.warn(e?.stack || e);
-    setTimeout(() => registerCommands(clientId, attempt + 1), delay);
+    setTimeout(() => registerCommandsAuto(appId, token, commands, devGuildId, attempt + 1), delay);
   }
 }
 

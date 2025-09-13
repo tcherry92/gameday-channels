@@ -193,11 +193,18 @@ const payload = {
 }
 
 function buildOverwrites(guild, role) {
-  if (!role) return undefined;
-  return [
+  const me = guild.members.me;
+  const base = [
     { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-    { id: role.id, allow: [PermissionFlagsBits.ViewChannel] },
+    { id: me.id, allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.ManageChannels,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory
+    ]},
   ];
+  if (role) base.push({ id: role.id, allow: [PermissionFlagsBits.ViewChannel] });
+  return base;
 }
 
 async function getOrCreateCategory(guild, name, overwrites) {
@@ -205,28 +212,33 @@ async function getOrCreateCategory(guild, name, overwrites) {
     c => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === name.toLowerCase()
   );
   if (existing) {
-    if (overwrites) await existing.permissionOverwrites.set(overwrites).catch(() => {});
+    if (overwrites) await existing.permissionOverwrites.set(overwrites).catch(()=>{});
     return existing;
   }
-  return guild.channels.create({ name, type: ChannelType.GuildCategory, permissionOverwrites: overwrites });
+  return guild.channels.create({
+    name,
+    type: ChannelType.GuildCategory,
+    permissionOverwrites: overwrites
+  });
 }
 
-async function getOrCreateTextChannel(guild, name, parentId, overwrites) {
+async function getOrCreateTextChannel(guild, name, parentId /*, overwrites */) {
   const safe = safeChannelName(name);
   const existing = guild.channels.cache.find(
     c => c.parentId === parentId && c.type === ChannelType.GuildText && c.name === safe
   );
-  if (existing) {
-    if (overwrites) await existing.permissionOverwrites.set(overwrites).catch(() => {});
-    return existing;
-  }
+  if (existing) return existing;
+
   return guild.channels.create({
     name: safe,
     type: ChannelType.GuildText,
-    parent: parentId,
-    permissionOverwrites: overwrites,
+    parent: parentId
+    // No permissionOverwrites here → inherits from category
   });
 }
+
+// in makeWeek:
+await getOrCreateTextChannel(interaction.guild, chName, cat.id /*, overwrites */);
 
 // ---------- Schedule storage ----------
 const SCHEDULES = new Map(); // guildId -> { source, weeks: { [n]: [{home, away}] } }
@@ -642,19 +654,6 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
   }
-
-  if (interaction.commandName === 'setup-season') {
-  const source = interaction.options.getString('source', true);
-  const doPurge = interaction.options.getBoolean('purge') || false;
-
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-  try {
-    if (source === 'nfl_2025') {
-      const res = await preloadFromBundled2025(interaction.guildId);
-      await interaction.editReply({ content: `📅 Source set to **nfl_2025**. ${res.msg}` });
-      return;
-    }
 
     // --- manual: clear all preloaded games for this guild ---
     const data = SCHEDULES.get(interaction.guildId) || { source: null, weeks: {} };

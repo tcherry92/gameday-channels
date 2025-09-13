@@ -566,9 +566,7 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      // in makeWeek:
-      await getOrCreateTextChannel(interaction.guild, chName, cat.id /*, overwrites */);
-
+      
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await makeWeek(interaction, week, role);
       return;

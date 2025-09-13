@@ -367,7 +367,13 @@ const commands = [
   {
     name: 'upgrade',
     description: 'Open checkout to unlock Pro features for this server.'
-  }
+  },
+  {
+  name: 'debug-week',
+  description: 'Show how many games the bot sees for a week',
+  options: [{ type: 4, name: 'week', description: 'Week number', required: true }],
+  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+}
 ];
 
 async function registerCommands(clientId, attempt = 1) {
@@ -529,6 +535,8 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
+    
+
     if (interaction.commandName === 'cleanup-week') {
       const week = interaction.options.getInteger('week', true);
       const confirm = interaction.options.getBoolean('confirm', true);
@@ -556,7 +564,19 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
   }
-
+  
+if (interaction.commandName === 'debug-week') {
+  const week = interaction.options.getInteger('week', true);
+  const data = SCHEDULES.get(interaction.guildId) || { weeks: {} };
+  const games = data.weeks?.[week] || [];
+  await interaction.reply({
+    content: `Week ${week}: I see **${games.length}** game(s).\n` +
+             games.slice(0, 10).map(g => `• ${g.home} vs ${g.away}`).join('\n') +
+             (games.length > 10 ? `\n… (${games.length - 10} more)` : ''),
+    flags: MessageFlags.Ephemeral
+  });
+  return;
+}
   // Modal submit handler
   if (interaction.isModalSubmit() && interaction.customId === 'manualAddModal') {
     const guildId = interaction.guildId;

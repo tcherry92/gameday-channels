@@ -475,14 +475,16 @@ client.once('clientReady', async () => {
 
 // ===================== Interactions =====================
 client.on('interactionCreate', async (interaction) => {
+  // Only handle slash commands and our modal submit
   if (!interaction.isChatInputCommand() && !interaction.isModalSubmit()) return;
 
-  // Always ensure the schedule is loaded for this guild
+  // Always load schedule for this guild
   const guildId = interaction.guildId;
   await loadSchedule(guildId);
 
   // ---------- Slash commands ----------
   if (interaction.isChatInputCommand()) {
+
     // /setup-season
     if (interaction.commandName === 'setup-season') {
       const source  = interaction.options.getString('source', true);
@@ -496,7 +498,7 @@ client.on('interactionCreate', async (interaction) => {
           return;
         }
 
-        // manual → clear out any preloaded games
+        // manual → clear all weeks
         const data = SCHEDULES.get(guildId) || { source: null, weeks: {} };
         data.source = 'manual';
         data.weeks  = {};
@@ -518,7 +520,7 @@ client.on('interactionCreate', async (interaction) => {
     // /import-schedule
     if (interaction.commandName === 'import-schedule') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const text = interaction.options.getString('schedule_text', true);
+      const text  = interaction.options.getString('schedule_text', true);
       const lines = text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
 
       const data = SCHEDULES.get(guildId) || { source: null, weeks: {} };
@@ -527,7 +529,7 @@ client.on('interactionCreate', async (interaction) => {
       for (const line of lines) {
         const parts = line.split(',').map(s => s.trim());
         if (parts.length < 3) { bad++; continue; }
-        const wk = String(Number(parts[0]));
+        const wk = String(Number(parts[0]));                 // normalize to "1"
         if (!wk || wk === 'NaN') { bad++; continue; }
 
         const { canonical: home } = normalizeTeam(parts[1]);
@@ -551,7 +553,6 @@ client.on('interactionCreate', async (interaction) => {
       const week = interaction.options.getInteger('week', true);
       const role = interaction.options.getRole('private_to_role') || null;
 
-      // Pro gate by week number
       const isPro = await guildHasPro(client, guildId);
       if (!isPro && week > FREE_WEEK_LIMIT) {
         await sendBuyButton(
@@ -566,7 +567,7 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    // /add-match (adds and immediately builds)
+    // /add-match (adds & builds)
     if (interaction.commandName === 'add-match') {
       const week = interaction.options.getInteger('week', true);
       const home = interaction.options.getString('home', true);
@@ -580,39 +581,40 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    // /manual-add → opens modal (SAFE VERSION)
-if (interaction.commandName === 'manual-add') {
-  const modal = new ModalBuilder()
-    .setCustomId('manualAddModal')
-    .setTitle('Add Matchup');
+    // /manual-add → open modal (no trailing commas!)
+    if (interaction.commandName === 'manual-add') {
+      const modal = new ModalBuilder()
+        .setCustomId('manualAddModal')
+        .setTitle('Add Matchup');
 
-  const weekInput = new TextInputBuilder()
-    .setCustomId('week')
-    .setLabel('Week number')
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true);
+      const weekInput = new TextInputBuilder()
+        .setCustomId('week')
+        .setLabel('Week number')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
 
-  const awayInput = new TextInputBuilder()
-    .setCustomId('away')
-    .setLabel('Away team (name or abbrev)')
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true);
+      const awayInput = new TextInputBuilder()
+        .setCustomId('away')
+        .setLabel('Away team (name or abbrev)')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
 
-  const homeInput = new TextInputBuilder()
-    .setCustomId('home')
-    .setLabel('Home team (name or abbrev)')
-    .setStyle(TextInputStyle.Short)
-    .setRequired(true);
+      const homeInput = new TextInputBuilder()
+        .setCustomId('home')
+        .setLabel('Home team (name or abbrev)')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true);
 
-  modal.addComponents(
-    new ActionRowBuilder().addComponents(weekInput),
-    new ActionRowBuilder().addComponents(awayInput),
-    new ActionRowBuilder().addComponents(homeInput)
-  );
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(weekInput),
+        new ActionRowBuilder().addComponents(awayInput),
+        new ActionRowBuilder().addComponents(homeInput)
+      );
 
-  await interaction.showModal(modal);
-  return;
-}
+      await interaction.showModal(modal);
+      return;
+    }
+
     // /cleanup-week
     if (interaction.commandName === 'cleanup-week') {
       const week    = interaction.options.getInteger('week', true);
@@ -625,7 +627,8 @@ if (interaction.commandName === 'manual-add') {
       }
 
       const cat = interaction.guild.channels.cache.find(
-        c => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === `week ${week}`.toLowerCase()
+        c => c.type === ChannelType.GuildCategory &&
+             c.name.toLowerCase() === `week ${week}`.toLowerCase()
       );
 
       if (!cat) {
@@ -635,9 +638,9 @@ if (interaction.commandName === 'manual-add') {
 
       const children = interaction.guild.channels.cache.filter(c => c.parentId === cat.id);
       for (const [, ch] of children) {
-        try { await ch.delete('Cleanup by /cleanup-week'); } catch {/* ignore */}
+        try { await ch.delete('Cleanup by /cleanup-week'); } catch {}
       }
-      try { await cat.delete('Cleanup by /cleanup-week'); } catch {/* ignore */}
+      try { await cat.delete('Cleanup by /cleanup-week'); } catch {}
       await interaction.editReply(`🗑️ Deleted Week ${week}.`);
       return;
     }
@@ -650,7 +653,7 @@ if (interaction.commandName === 'manual-add') {
 
     // /debug-week
     if (interaction.commandName === 'debug-week') {
-      const wk = String(Number(interaction.options.getInteger('week', true)));
+      const wk    = String(Number(interaction.options.getInteger('week', true)));
       const data  = SCHEDULES.get(guildId) || { weeks: {} };
       const games = data.weeks?.[wk] || [];
       await interaction.reply({

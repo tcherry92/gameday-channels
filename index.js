@@ -18,6 +18,11 @@ import {
 
 // add to your existing imports
 import { MessageFlags } from 'discord.js';
+import { fileURLToPath } from 'url';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
+const ROOT_DIR = __dirname;
+const DATA_DIR = path.join(ROOT_DIR, 'data');
 
 // near imports (top of file)
 import { setGlobalDispatcher, Agent } from 'undici';

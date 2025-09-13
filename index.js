@@ -80,7 +80,7 @@ const APP_ID = process.env.APP_ID;                 // NEW
 const GUILD_PRO_SKU_ID = process.env.GUILD_PRO_SKU_ID; // NEW
 
 // Free tier: allow creating up to this many weeks without Pro
-const FREE_WEEK_LIMIT = 2; // change to 0 if you want everything gated
+const FREE_WEEK_LIMIT = 18; // change to 0 if you want everything gated
 
 
 await fs.ensureDir(DATA_DIR);

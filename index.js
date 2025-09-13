@@ -453,7 +453,12 @@ client.once('clientReady', async () => {
     }
   }
 
-  await registerCommands(client.user.id).catch(console.error);
+  await registerCommandsAuto(
+  process.env.APP_ID,
+  process.env.DISCORD_TOKEN,
+  commands,
+  process.env.GUILD_ID // leave unset in production
+);
 });
 
 // Interactions

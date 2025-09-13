@@ -237,9 +237,6 @@ async function getOrCreateTextChannel(guild, name, parentId /*, overwrites */) {
   });
 }
 
-// in makeWeek:
-await getOrCreateTextChannel(interaction.guild, chName, cat.id /*, overwrites */);
-
 // ---------- Schedule storage ----------
 const SCHEDULES = new Map(); // guildId -> { source, weeks: { [n]: [{home, away}] } }
 const scheduleFile = guildId => path.join(DATA_DIR, `schedule-${guildId}.json`);
@@ -561,6 +558,9 @@ client.on('interactionCreate', async (interaction) => {
         );
         return;
       }
+
+      // in makeWeek:
+      await getOrCreateTextChannel(interaction.guild, chName, cat.id /*, overwrites */);
 
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await makeWeek(interaction, week, role);

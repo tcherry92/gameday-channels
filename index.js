@@ -424,23 +424,30 @@ const commands = [
 ];
 
 async function registerCommandsAuto(appId, token, commands, devGuildId, attempt = 1) {
+  const rest = new REST({ version: '10' }).setToken(token);
+
+  // helper for nicer logs
+  const logErr = (prefix, e) =>
+    console.error(`${prefix}:`, e?.status ?? '', e?.code ?? '', e?.message ?? e);
+
   try {
-    const rest = new REST({ version: '10' }).setToken(token);
-
     if (devGuildId) {
-      // Fast dev mode: only registers to your test guild
       await rest.put(Routes.applicationGuildCommands(appId, devGuildId), { body: commands });
-      console.log('✅ Slash commands registered (guild).');
+      console.log(`✅ Guild commands registered (instant): guild=${devGuildId} count=${commands.length}`);
     } else {
-      // Production: register globally
-      await rest.put(Routes.applicationCommands(appId), { body: commands });
-      console.log('🌍 Slash commands registered (global). May take up to 1 hour to propagate.');
+      console.log('ℹ️ No GUILD_ID set; skipping guild (dev) registration.');
     }
-
   } catch (e) {
+    logErr('❌ Guild registration failed', e);
+  }
+
+  try {
+    await rest.put(Routes.applicationCommands(appId), { body: commands });
+    console.log(`🌍 Global commands registered: count=${commands.length} (may take up to ~1 hour to appear)`);
+  } catch (e) {
+    logErr('❌ Global registration failed', e);
     const delay = Math.min(15000 * attempt, 60000);
-    console.warn(`Command registration failed (attempt ${attempt}). Retrying in ${delay / 1000}s`);
-    console.warn(e?.stack || e);
+    console.warn(`Retrying registration in ${Math.round(delay/1000)}s (attempt ${attempt + 1})…`);
     setTimeout(() => registerCommandsAuto(appId, token, commands, devGuildId, attempt + 1), delay);
   }
 }

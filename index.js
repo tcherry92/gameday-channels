@@ -277,24 +277,46 @@ async function makeWeek(interaction, week, role) {
 // ---------- Preload from bundled local file (no network) ----------
 const NFL_2025_BUNDLED = path.join(DATA_DIR, 'nfl_2025.json');
 
-async function ensureBundledNFL2025() {
-  if (!(await fs.pathExists(NFL_2025_BUNDLED))) {
-    await fs.writeJSON(NFL_2025_BUNDLED, {
-      note: "Replace with your full 2025 schedule. Canonical names match TEAM_MAP.",
-      weeks: { "1": [ { "home": "Eagles", "away": "Cowboys" } ] }
-    }, { spaces: 2 });
+async function readBundled2025() {
+  // Ensure file exists
+  const exists = await fs.pathExists(NFL_2025_BUNDLED);
+  if (!exists) {
+    throw new Error(
+      `Missing file: ${NFL_2025_BUNDLED}. ` +
+      `Add your full 2025 schedule JSON there (see README).`
+    );
   }
+
+  // Parse JSON
+  const json = await fs.readJSON(NFL_2025_BUNDLED);
+
+  // Basic validation
+  if (!json || typeof json !== 'object' || !json.weeks || typeof json.weeks !== 'object') {
+    throw new Error(`Invalid schedule format in ${NFL_2025_BUNDLED}: expected { weeks: { "1": [ ... ] } }`);
+  }
+
+  // Optional: quick sanity log to help debugging
+  const weekKeys = Object.keys(json.weeks).sort((a, b) => Number(a) - Number(b));
+  const summary = weekKeys.map(w => `${w}:${Array.isArray(json.weeks[w]) ? json.weeks[w].length : 0}`).join(' ');
+  console.log(`📦 Loaded nfl_2025.json weeks=${weekKeys.length}  gamesByWeek=${summary}`);
+
+  return json;
 }
 
 async function preloadFromBundled2025(guildId) {
-  await ensureBundledNFL2025();
-  const json = await fs.readJSON(NFL_2025_BUNDLED);
+  const json = await readBundled2025();
+
   const data = SCHEDULES.get(guildId) || { source: null, weeks: {} };
   data.source = 'nfl_2025';
   data.weeks = json.weeks || {};
   SCHEDULES.set(guildId, data);
+
   await saveSchedule(guildId);
-  return { ok: true, msg: `Preloaded 2025 schedule from local file (data/nfl_2025.json).` };
+  return {
+    ok: true,
+    msg: `Preloaded 2025 schedule from local file (data/nfl_2025.json). ` +
+         `Weeks loaded: ${Object.keys(data.weeks).length}.`
+  };
 }
 
 // ---------- Commands ----------

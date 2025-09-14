@@ -14,14 +14,12 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  MessageFlags,          // include here so you don't import discord.js twice
 } from 'discord.js';
-
-// add to your existing imports
-import { MessageFlags } from 'discord.js';
 import { fileURLToPath } from 'url';
+import { setGlobalDispatcher, Agent } from 'undici';
 
-// ---------- Paths ----------
-import { fileURLToPath } from 'url';
+// ---- Paths (only once) ----
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
@@ -29,19 +27,14 @@ const __dirname  = path.dirname(__filename);
 const DATA_DIR = process.env.DATA_DIR || '/disk';
 await fs.ensureDir(DATA_DIR);
 
+// Bundled, read-only NFL file in the repo
+const NFL_2025_BUNDLED = path.join(__dirname, 'data', 'nfl_2025.json');
+
 // Guild schedule files live on disk
 const scheduleFile = (guildId) => path.join(DATA_DIR, `schedule-${guildId}.json`);
 
-// Bundled, read-only NFL file lives in the repo (NOT on disk)
-const NFL_2025_BUNDLED = path.join(__dirname, 'data', 'nfl_2025.json');
-
-
-// near imports (top of file)
-import { setGlobalDispatcher, Agent } from 'undici';
-setGlobalDispatcher(new Agent({
-  keepAliveTimeout: 10,   // shorter keep-alive
-  headersTimeout: 0       // disable headers timeout
-}));
+// Undici tuning
+setGlobalDispatcher(new Agent({ keepAliveTimeout: 10, headersTimeout: 0 }));
 
 // --- Paywall guard: gate whole commands cleanly ---
 async function requireProGuild(interaction, featureName = 'this feature') {
@@ -262,8 +255,6 @@ async function getOrCreateTextChannel(guild, name, parentId /*, overwrites */) {
 
 // ---------- Schedule storage ----------
 const SCHEDULES = new Map(); // guildId -> { source, weeks: { [n]: [{home, away}] } }
-const scheduleFile = guildId => path.join(DATA_DIR, `schedule-${guildId}.json`);
-
 async function loadSchedule(guildId) {
   const fp = scheduleFile(guildId);
   if (await fs.pathExists(fp)) {
@@ -417,7 +408,6 @@ const commands = [
   {
   name: 'bulk-import',
   description: 'Open a modal to paste many lines: week,home,away',
-  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
 },
   // NEW: Upgrade entrypoint
   {
@@ -427,12 +417,10 @@ const commands = [
   {
   name: 'complete',
   description: 'Mark THIS channel complete (adds ✅ to the channel name).',
-  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
 },
 {
   name: 'uncomplete',
   description: 'Remove the ✅ from THIS channel name.',
-  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
 },
   {
   name: 'debug-week',

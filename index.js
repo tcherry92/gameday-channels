@@ -180,36 +180,50 @@ async function sendBuyButton(interaction, message = 'Unlock **GameDay Channels P
     return interaction.reply({ content: warn, flags: MessageFlags.Ephemeral });
   }
 
+  // Try modern builder API first
   let components;
-
   try {
-    // Try the new builder API if your discord.js version supports it
-    const btn = new ButtonBuilder()
-      .setLabel('Unlock Pro')
-      .setStyle(ButtonStyle.Premium);
+    const btn = new ButtonBuilder().setLabel('Unlock Pro');
 
-    // Only call setSkuId if it exists on this version
+    // ButtonStyle.Premium exists on newer discord.js; fall back to numeric style:6 otherwise
+    const premiumStyle = ButtonStyle?.Premium ?? 6;
+
+    // Only call setSkuId if present on this version
     if (typeof btn.setSkuId === 'function') {
-      components = [ new ActionRowBuilder().addComponents(btn.setSkuId(GUILD_PRO_SKU_ID)) ];
+      btn.setStyle(premiumStyle).setSkuId(GUILD_PRO_SKU_ID);
+      components = [ new ActionRowBuilder().addComponents(btn) ];
     } else {
-      throw new Error('setSkuId not available in this discord.js version');
+      throw new Error('setSkuId not available; using raw JSON button');
     }
   } catch {
-    // Fallback: raw JSON Premium button (style 9) works without setSkuId()
+    // Raw JSON fallback (works without builder support)
+    // style 6 = Premium purchase button
     components = [{
       type: 1, // ActionRow
       components: [{
-        type: 2,            // Button
-        style: 9,           // Premium
+        type: 2,           // Button
+        style: 6,          // Premium
         sku_id: GUILD_PRO_SKU_ID,
         label: 'Unlock Pro'
       }]
     }];
   }
 
+  // As a final safety, if style:6 is rejected by this gateway, send a Link button to your store page
   const payload = { content: message, components, flags: MessageFlags.Ephemeral };
-  if (interaction.deferred || interaction.replied) return interaction.editReply(payload);
-  return interaction.reply(payload);
+  try {
+    if (interaction.deferred || interaction.replied) return await interaction.editReply(payload);
+    return await interaction.reply(payload);
+  } catch (e) {
+    // Fallback to Link button so users can still buy
+    const url = `https://discord.com/application-directory/${APP_ID}`; // your listing
+    const linkRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Open Pro Listing').setURL(url)
+    );
+    const linkPayload = { content: message, components: [linkRow], flags: MessageFlags.Ephemeral };
+    if (interaction.deferred || interaction.replied) return interaction.editReply(linkPayload);
+    return interaction.reply(linkPayload);
+  }
 }
 function buildOverwrites(guild, role) {
   const me = guild.members.me;

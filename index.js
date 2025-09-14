@@ -171,27 +171,46 @@ async function guildHasPro(client, guildId) {
   }
 }
 
-async function sendBuyButton(interaction, message = 'Unlock **League Pro** for this server:') {
+async function sendBuyButton(interaction, message = 'Unlock **GameDay Channels Pro** for this server:') {
   if (!GUILD_PRO_SKU_ID) {
-    return interaction.reply({
-  content: '⚠️ Purchase not configured. Ask the owner to set GUILD_PRO_SKU_ID.',
-  flags: MessageFlags.Ephemeral
-});
+    const warn = '⚠️ Purchase not configured. Ask the owner to set GUILD_PRO_SKU_ID.';
+    if (interaction.deferred || interaction.replied) {
+      return interaction.editReply({ content: warn, flags: MessageFlags.Ephemeral });
+    }
+    return interaction.reply({ content: warn, flags: MessageFlags.Ephemeral });
   }
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setStyle(ButtonStyle.Premium)  // opens Discord checkout
-      .setSkuId(GUILD_PRO_SKU_ID)
-  );
-const payload = { 
-  content: message, 
-  components: [row], 
-  flags: MessageFlags.Ephemeral 
-};
-  if (interaction.deferred) return interaction.editReply(payload);
+
+  let components;
+
+  try {
+    // Try the new builder API if your discord.js version supports it
+    const btn = new ButtonBuilder()
+      .setLabel('Unlock Pro')
+      .setStyle(ButtonStyle.Premium);
+
+    // Only call setSkuId if it exists on this version
+    if (typeof btn.setSkuId === 'function') {
+      components = [ new ActionRowBuilder().addComponents(btn.setSkuId(GUILD_PRO_SKU_ID)) ];
+    } else {
+      throw new Error('setSkuId not available in this discord.js version');
+    }
+  } catch {
+    // Fallback: raw JSON Premium button (style 9) works without setSkuId()
+    components = [{
+      type: 1, // ActionRow
+      components: [{
+        type: 2,            // Button
+        style: 9,           // Premium
+        sku_id: GUILD_PRO_SKU_ID,
+        label: 'Unlock Pro'
+      }]
+    }];
+  }
+
+  const payload = { content: message, components, flags: MessageFlags.Ephemeral };
+  if (interaction.deferred || interaction.replied) return interaction.editReply(payload);
   return interaction.reply(payload);
 }
-
 function buildOverwrites(guild, role) {
   const me = guild.members.me;
   const base = [

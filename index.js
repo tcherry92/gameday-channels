@@ -22,8 +22,8 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 const ROOT_DIR = __dirname;
-const DATA_DIR = path.join(ROOT_DIR, 'data');
-
+const DATA_DIR = process.env.DATA_DIR || '/disk';
+await fs.ensureDir(DATA_DIR);
 // near imports (top of file)
 import { setGlobalDispatcher, Agent } from 'undici';
 setGlobalDispatcher(new Agent({

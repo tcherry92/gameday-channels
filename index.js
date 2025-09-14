@@ -19,11 +19,23 @@ import {
 // add to your existing imports
 import { MessageFlags } from 'discord.js';
 import { fileURLToPath } from 'url';
+
+// ---------- Paths ----------
+import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
-const ROOT_DIR = __dirname;
+
+// Persistent disk for dynamic guild data
 const DATA_DIR = process.env.DATA_DIR || '/disk';
 await fs.ensureDir(DATA_DIR);
+
+// Guild schedule files live on disk
+const scheduleFile = (guildId) => path.join(DATA_DIR, `schedule-${guildId}.json`);
+
+// Bundled, read-only NFL file lives in the repo (NOT on disk)
+const NFL_2025_BUNDLED = path.join(__dirname, 'data', 'nfl_2025.json');
+
+
 // near imports (top of file)
 import { setGlobalDispatcher, Agent } from 'undici';
 setGlobalDispatcher(new Agent({
@@ -50,48 +62,7 @@ async function requireProGuild(interaction, featureName = 'this feature') {
 
 
 
-// --- Safe interaction replies with retry on UND_ERR_SOCKET ---
-async function safeEdit(interaction, payload, attempt = 1) {
-  try {
-    return await interaction.editReply(payload);
-  } catch (e) {
-    if (e?.code === 'UND_ERR_SOCKET' && attempt < 3) {
-      const delay = attempt * 500; await new Promise(r => setTimeout(r, delay));
-      console.warn(`editReply hiccup, retrying (${attempt})`);
-      return safeEdit(interaction, payload, attempt + 1);
-    }
-    console.error('editReply failed:', e);
-    throw e;
-  }
-}
-async function safeReply(interaction, payload, attempt = 1) {
-  try {
-    if (interaction.deferred || interaction.replied) return await interaction.editReply(payload);
-    return await interaction.reply(payload);
-  } catch (e) {
-    if (e?.code === 'UND_ERR_SOCKET' && attempt < 3) {
-      const delay = attempt * 500; await new Promise(r => setTimeout(r, delay));
-      console.warn(`reply hiccup, retrying (${attempt})`);
-      return safeReply(interaction, payload, attempt + 1);
-    }
-    console.error('reply failed:', e);
-    throw e;
-  }
-}
-process.on('unhandledRejection', (err) => {
-  if (err && err.code === 'UND_ERR_SOCKET') {
-    console.warn('⚠️ Network hiccup (UND_ERR_SOCKET). Continuing…');
-    return;
-  }
-  console.error('UNHANDLED REJECTION:', err);
-});
-process.on('uncaughtException', (err) => {
-  if (err && err.code === 'UND_ERR_SOCKET') {
-    console.warn('⚠️ Network hiccup (UND_ERR_SOCKET). Continuing…');
-    return;
-  }
-  console.error('UNCAUGHT EXCEPTION:', err);
-});
+
 
 const token = process.env.DISCORD_TOKEN;
 const devGuildId = process.env.GUILD_ID;
@@ -341,54 +312,35 @@ async function makeWeek(interaction, week, role) {
 }
 
 // ---------- Preload from bundled local file (no network) ----------
-const NFL_2025_BUNDLED = path.join(DATA_DIR, 'nfl_2025.json');
-
+// ---------- Read bundled NFL 2025 (repo only) ----------
 async function readBundled2025Raw() {
-  const abs = path.resolve(NFL_2025_BUNDLED);
-  const exists = await fs.pathExists(abs);
-  if (!exists) throw new Error(`Missing ${abs}`);
+  const exists = await fs.pathExists(NFL_2025_BUNDLED);
+  if (!exists) throw new Error(`Missing bundled file: ${NFL_2025_BUNDLED}`);
 
-  const text = await fs.readFile(abs, 'utf8');
-  // quick sanity: count how many games by scanning for `"home":`
+  const text = await fs.readFile(NFL_2025_BUNDLED, 'utf8');
   const approxGames = (text.match(/"home"\s*:/g) || []).length;
-  console.log(`📄 nfl_2025.json @ ${abs}  bytes=${text.length}  approxGames=${approxGames}`);
+  console.log(`📄 Loaded nfl_2025.json (bundled) games≈${approxGames}`);
   return JSON.parse(text);
 }
 
+// ---------- Preload from bundled into guild schedule on disk ----------
 async function preloadFromBundled2025(guildId) {
   const json = await readBundled2025Raw();
 
-  if (!json || !json.weeks || typeof json.weeks !== 'object') {
-    throw new Error(`Invalid format in nfl_2025.json (expected { weeks: { "1": [ ... ] } })`);
+  if (!json || typeof json !== 'object' || typeof json.weeks !== 'object') {
+    throw new Error('Invalid format in nfl_2025.json (expected { weeks: { "1": [ ... ] } })');
   }
 
-  async function preloadFromBundled2025(guildId, { force = false } = {}) {
-  const current = SCHEDULES.get(guildId);
-  if (current?.source === 'manual' && !force) {
-    return {
-      ok: false,
-      msg: 'Guild is in **manual** mode; not preloading. Use /setup-season source:nfl_2025 to switch.'
-    };
-  }
+  const weekKeys = Object.keys(json.weeks).sort((a, b) => Number(a) - Number(b));
+  const summary  = weekKeys.map(w => `${w}:${Array.isArray(json.weeks[w]) ? json.weeks[w].length : 0}`).join(' ');
 
-  const json = await readBundled2025Raw(); // your validated reader
+  // Persist to disk as this guild’s active schedule
   const data = { source: 'nfl_2025', weeks: json.weeks || {} };
   SCHEDULES.set(guildId, data);
   await saveSchedule(guildId);
 
-  return { ok: true, msg: `Preloaded 2025 from data/nfl_2025.json (weeks=${Object.keys(data.weeks).length}).` };
-}
-  // Build a concise summary like 1:16 2:14 ...
-  const weekKeys = Object.keys(json.weeks).sort((a, b) => Number(a) - Number(b));
-  const summary = weekKeys.map(w => `${w}:${Array.isArray(json.weeks[w]) ? json.weeks[w].length : 0}`).join(' ');
-  console.log(`📦 Loaded weeks=${weekKeys.length}  gamesByWeek=${summary}`);
-
-  // Forcefully replace any cached schedule for this guild
-  const data = { source: 'nfl_2025', weeks: json.weeks };
-  SCHEDULES.set(guildId, data);
-  await saveSchedule(guildId);
-
-  return { ok: true, msg: `Preloaded 2025 from data/nfl_2025.json (weeks=${weekKeys.length}).` };
+  console.log(`📦 Preloaded 2025 → guild=${guildId} weeks=${weekKeys.length} gamesByWeek=${summary}`);
+  return { ok: true, msg: `Preloaded ${weekKeys.length} weeks (${summary}).` };
 }
 // ---------- Commands ----------
 const commands = [

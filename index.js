@@ -473,12 +473,39 @@ const commands = [
     description: 'Open checkout to unlock Pro features for this server.'
   },
   {
+  name: 'complete',
+  description: 'Mark THIS channel complete (adds ✅ to the channel name).',
+  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+},
+{
+  name: 'uncomplete',
+  description: 'Remove the ✅ from THIS channel name.',
+  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+},
+  {
   name: 'debug-week',
   description: 'Show how many games the bot sees for a week',
   options: [{ type: 4, name: 'week', description: 'Week number', required: true }],
   default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
 }
 ];
+
+// Prefix we use for completed channels
+const COMPLETE_PREFIX = '✅-';
+
+function isCompletedName(name) {
+  return name?.startsWith(COMPLETE_PREFIX) || name?.startsWith('✅');
+}
+
+function makeCompletedName(name) {
+  // Ensure no spaces (text channels) and avoid double-prefix
+  if (isCompletedName(name)) return name;
+  return `${COMPLETE_PREFIX}${name}`.slice(0, 100); // Discord limit safety
+}
+
+function makeUncompletedName(name) {
+  return name.replace(/^✅-?/, '').slice(0, 100);
+}
 
 async function registerCommandsAuto(appId, token, commands, devGuildId, attempt = 1) {
   const rest = new REST({ version: '10' }).setToken(token);
@@ -578,7 +605,70 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-  
+
+  // /complete
+if (interaction.commandName === 'complete') {
+  const guildId = interaction.guildId;
+
+  // 🔒 Monetization gate
+  const isPro = await guildHasPro(client, guildId);
+  if (!isPro) {
+    await sendBuyButton(
+      interaction,
+      `🔒 **Pro required** to use /complete. Unlock GameDay Channels Pro to enable this feature.`
+    );
+    return;
+  }
+
+  // --- Proceed if Pro ---
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  try {
+    const channel = interaction.channel;
+    if (!channel) {
+      await interaction.editReply('⚠️ Could not resolve this channel.');
+      return;
+    }
+
+    const newName = channel.name.includes('✅')
+      ? channel.name // already marked
+      : `${channel.name} ✅`;
+
+    await channel.setName(newName, 'Marked complete by /complete');
+    await interaction.editReply(`✅ Channel marked complete: **${newName}**`);
+  } catch (e) {
+    console.error('Error in /complete:', e);
+    await interaction.editReply('❌ Failed to mark channel complete.');
+  }
+  return;
+}
+
+// /uncomplete — Pro-only
+if (interaction.commandName === 'uncomplete') {
+  if (!(await requireProGuild(interaction, 'Uncomplete Channel'))) return;
+
+  const ch = interaction.channel;
+  if (!ch || !interaction.guild) {
+    await interaction.reply({ content: 'Use this inside a server channel.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const canManage = interaction.guild.members.me?.permissionsIn(ch)?.has(PermissionFlagsBits.ManageChannels);
+  if (!canManage) {
+    await interaction.reply({ content: 'I need **Manage Channels** in this channel to rename it.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const oldName = ch.name;
+  if (!isCompletedName(oldName)) {
+    await interaction.reply({ content: `No ✅ to remove on **#${oldName}**.`, flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const newName = makeUncompletedName(oldName);
+  await ch.setName(newName, 'Unmarked by /uncomplete').catch(()=>{});
+  await interaction.reply({ content: `🧹 Unmarked → **#${newName}**`, flags: MessageFlags.Ephemeral });
+  return;
+}
     // /import-schedule
     if (interaction.commandName === 'import-schedule') {
       if (!(await requireProGuild(interaction, 'Schedule Import'))) return;

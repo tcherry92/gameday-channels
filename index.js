@@ -639,9 +639,11 @@ client.on('interactionCreate', async (interaction) => {
       await makeWeek(interaction, week, role);
       return;
     }
-
+  
+}
     // /manual-add → open modal (no trailing commas!)
     if (interaction.commandName === 'manual-add') {
+      if (!(await requireProGuild(interaction, 'Custom Matchups'))) return;
       const modal = new ModalBuilder()
         .setCustomId('manualAddModal')
         .setTitle('Add Matchup');
@@ -676,6 +678,7 @@ client.on('interactionCreate', async (interaction) => {
 
     // /cleanup-week
     if (interaction.commandName === 'cleanup-week') {
+      if (!(await requireProGuild(interaction, 'Cleanup Week'))) return;
       const week    = interaction.options.getInteger('week', true);
       const confirm = interaction.options.getBoolean('confirm', true);
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });

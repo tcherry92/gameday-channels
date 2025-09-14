@@ -710,23 +710,23 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    //bulk-import
+    // /bulk-import
     if (interaction.commandName === 'bulk-import') {
-  if (!(await requireProGuild(interaction, 'Bulk Import'))) return;
+    if (!(await requireProGuild(interaction, 'Bulk Import'))) return;
 
-  const modal = new ModalBuilder()
-    .setCustomId('bulkImportModal')
-    .setTitle('Bulk Import: week,home,away');
+    const modal = new ModalBuilder()
+      .setCustomId('bulkImportModal')
+      .setTitle('Bulk Import: week,home,away');
 
-  const textarea = new TextInputBuilder()
-    .setCustomId('bulkText')
-    .setLabel('Paste lines (CSV): week,home,away')
-    .setStyle(TextInputStyle.Paragraph)
-    .setRequired(true);
+    const textarea = new TextInputBuilder()
+      .setCustomId('bulkText')
+      .setLabel('Paste lines (CSV): week,home,away')
+      .setStyle(TextInputStyle.Paragraph)
+      .setRequired(true);
 
-  modal.addComponents(new ActionRowBuilder().addComponents(textarea));
-  await interaction.showModal(modal);
-  return;
+    modal.addComponents(new ActionRowBuilder().addComponents(textarea));
+    await interaction.showModal(modal);
+    return;
 }
 
     // /upgrade

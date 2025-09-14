@@ -462,6 +462,11 @@ const commands = [
     ],
     default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
   },
+  {
+  name: 'bulk-import',
+  description: 'Open a modal to paste many lines: week,home,away',
+  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+},
   // NEW: Upgrade entrypoint
   {
     name: 'upgrade',
@@ -639,11 +644,9 @@ client.on('interactionCreate', async (interaction) => {
       await makeWeek(interaction, week, role);
       return;
     }
-  
-}
+
     // /manual-add → open modal (no trailing commas!)
     if (interaction.commandName === 'manual-add') {
-      if (!(await requireProGuild(interaction, 'Custom Matchups'))) return;
       const modal = new ModalBuilder()
         .setCustomId('manualAddModal')
         .setTitle('Add Matchup');
@@ -707,6 +710,25 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
+    //bulk-import
+    if (interaction.commandName === 'bulk-import') {
+  if (!(await requireProGuild(interaction, 'Bulk Import'))) return;
+
+  const modal = new ModalBuilder()
+    .setCustomId('bulkImportModal')
+    .setTitle('Bulk Import: week,home,away');
+
+  const textarea = new TextInputBuilder()
+    .setCustomId('bulkText')
+    .setLabel('Paste lines (CSV): week,home,away')
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(true);
+
+  modal.addComponents(new ActionRowBuilder().addComponents(textarea));
+  await interaction.showModal(modal);
+  return;
+}
+
     // /upgrade
     if (interaction.commandName === 'upgrade') {
       await sendBuyButton(interaction);
@@ -731,6 +753,48 @@ client.on('interactionCreate', async (interaction) => {
   }
 
   // ---------- Modal submit ----------
+if (interaction.isModalSubmit() && interaction.customId === 'bulkImportModal') {
+  if (!(await requireProGuild(interaction, 'Bulk Import'))) return;
+
+  const guildId = interaction.guildId;
+  await loadSchedule(guildId);
+
+  const raw = interaction.fields.getTextInputValue('bulkText') || '';
+  const lines = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+
+  const data = SCHEDULES.get(guildId) || { source: null, weeks: {} };
+  let added = 0, bad = 0;
+
+  for (const line of lines) {
+    if (line.startsWith('#')) continue;
+    const parts = line.split(',').map(s => s.trim());
+    if (parts.length < 3) { bad++; continue; }
+
+    const wk = String(Number(parts[0]));
+    if (!wk || wk === 'NaN') { bad++; continue; }
+
+    const { canonical: home } = normalizeTeam(parts[1]);
+    const { canonical: away } = normalizeTeam(parts[2]);
+
+    data.weeks[wk] = data.weeks[wk] || [];
+    const dup = data.weeks[wk].some(m => m.home === home && m.away === away);
+    if (!dup) { data.weeks[wk].push({ home, away }); added++; }
+  }
+
+  SCHEDULES.set(guildId, data);
+  await saveSchedule(guildId);
+
+  const touched = Object.entries(data.weeks)
+    .filter(([_, arr]) => (arr?.length ?? 0) > 0)
+    .map(([w, arr]) => `${w}:${arr.length}`).join(' ');
+
+  await interaction.reply({
+    content: `✅ Bulk import complete.\n• Added: **${added}**   • Skipped (bad/dup): **${bad}**\n${touched ? `Weeks now: ${touched}` : ''}`,
+    flags: MessageFlags.Ephemeral
+  });
+  return;
+}
+  
   if (interaction.isModalSubmit() && interaction.customId === 'manualAddModal') {
     const wk   = String(Number(interaction.fields.getTextInputValue('week')));
     const away = interaction.fields.getTextInputValue('away');

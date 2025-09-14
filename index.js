@@ -31,6 +31,25 @@ setGlobalDispatcher(new Agent({
   headersTimeout: 0       // disable headers timeout
 }));
 
+// --- Paywall guard: gate whole commands cleanly ---
+async function requireProGuild(interaction, featureName = 'this feature') {
+  const isPro = await guildHasPro(client, interaction.guildId);
+  if (isPro) return true;
+
+  // If the interaction was already deferred, edit; otherwise reply
+  const msg = `🔒 **Pro required** to use **${featureName}** on this server.`;
+  if (interaction.deferred || interaction.replied) {
+    await interaction.editReply({ content: msg, components: [], flags: MessageFlags.Ephemeral }).catch(()=>{});
+    await sendBuyButton(interaction, msg);
+  } else {
+    await sendBuyButton(interaction, msg);
+  }
+  return false;
+}
+
+
+
+
 // --- Safe interaction replies with retry on UND_ERR_SOCKET ---
 async function safeEdit(interaction, payload, attempt = 1) {
   try {
@@ -554,8 +573,10 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
+  
     // /import-schedule
     if (interaction.commandName === 'import-schedule') {
+      if (!(await requireProGuild(interaction, 'Schedule Import'))) return;
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const text  = interaction.options.getString('schedule_text', true);
       const lines = text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);

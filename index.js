@@ -191,10 +191,10 @@ async function sendBuyButton(interaction, message = 'Unlock **GameDay Channels P
   const payload = {
     content: message,
     components: [{
-      type: 1, // ActionRow
+      type: 1,
       components: [{
-        type: 2,   // Button
-        style: 6,  // Premium purchase button
+        type: 2,
+        style: 6, // Premium purchase button
         sku_id: String(GUILD_PRO_SKU_ID),
         label: 'Unlock Pro'
       }]
@@ -209,7 +209,6 @@ async function sendBuyButton(interaction, message = 'Unlock **GameDay Channels P
       await interaction.reply(payload);
     }
   } catch {
-    // Fallback: Link button
     const url = `https://discord.com/application-directory/${APP_ID}`;
     const linkPayload = {
       content: message,
@@ -232,22 +231,7 @@ async function sendBuyButton(interaction, message = 'Unlock **GameDay Channels P
     }
   }
 }
-  // As a final safety, if style:6 is rejected by this gateway, send a Link button to your store page
-  const payload = { content: message, components, flags: MessageFlags.Ephemeral };
-  try {
-    if (interaction.deferred || interaction.replied) return await interaction.editReply(payload);
-    return await interaction.reply(payload);
-  } catch (e) {
-    // Fallback to Link button so users can still buy
-    const url = `https://discord.com/application-directory/${APP_ID}`; // your listing
-    const linkRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Open Pro Listing').setURL(url)
-    );
-    const linkPayload = { content: message, components: [linkRow], flags: MessageFlags.Ephemeral };
-    if (interaction.deferred || interaction.replied) return interaction.editReply(linkPayload);
-    return interaction.reply(linkPayload);
-  }
-}
+
 function buildOverwrites(guild, role) {
   const me = guild.members.me;
   const base = [

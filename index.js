@@ -180,40 +180,47 @@ async function guildHasPro(client, guildId) {
 async function sendBuyButton(interaction, message = 'Unlock **GameDay Channels Pro** for this server:') {
   if (!GUILD_PRO_SKU_ID) {
     const warn = '⚠️ Purchase not configured. Ask the owner to set GUILD_PRO_SKU_ID.';
-    if (interaction.deferred || interaction.replied) {
-      return interaction.editReply({ content: warn, flags: MessageFlags.Ephemeral });
-    }
-    return interaction.reply({ content: warn, flags: MessageFlags.Ephemeral });
+    const fn = (interaction.deferred || interaction.replied) ? 'editReply' : 'reply';
+    return interaction[fn]({ content: warn, flags: MessageFlags.Ephemeral });
   }
 
-  // Try modern builder API first
-  let components;
-  try {
-    const btn = new ButtonBuilder().setLabel('Unlock Pro');
-
-    // ButtonStyle.Premium exists on newer discord.js; fall back to numeric style:6 otherwise
-    const premiumStyle = ButtonStyle?.Premium ?? 6;
-
-    // Only call setSkuId if present on this version
-    if (typeof btn.setSkuId === 'function') {
-      btn.setStyle(premiumStyle).setSkuId(GUILD_PRO_SKU_ID);
-      components = [ new ActionRowBuilder().addComponents(btn) ];
-    } else {
-      throw new Error('setSkuId not available; using raw JSON button');
-    }
-  } catch {
-    // Raw JSON fallback (works without builder support)
-    // style 6 = Premium purchase button
-    components = [{
+  // Raw JSON Premium button (works on discord.js v14)
+  const payload = {
+    content: message,
+    components: [{
       type: 1, // ActionRow
       components: [{
-        type: 2,           // Button
-        style: 6,          // Premium
-        sku_id: GUILD_PRO_SKU_ID,
+        type: 2,        // Button
+        style: 6,       // Premium purchase button
+        sku_id: String(GUILD_PRO_SKU_ID),
         label: 'Unlock Pro'
       }]
-    }];
+    }],
+    flags: MessageFlags.Ephemeral
+  };
+
+  const fn = (interaction.deferred || interaction.replied) ? 'editReply' : 'reply';
+
+  try {
+    return await interaction[fn](payload);
+  } catch (e) {
+    // Fallback: Link button to your app listing if Premium button is rejected
+    const url = `https://discord.com/application-directory/${APP_ID}`;
+    return interaction[fn]({
+      content: message,
+      components: [{
+        type: 1,
+        components: [{
+          type: 2,
+          style: 5,           // Link
+          url,
+          label: 'Open Pro Listing'
+        }]
+      }],
+      flags: MessageFlags.Ephemeral
+    });
   }
+}
 
   // As a final safety, if style:6 is rejected by this gateway, send a Link button to your store page
   const payload = { content: message, components, flags: MessageFlags.Ephemeral };

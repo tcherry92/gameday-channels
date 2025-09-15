@@ -193,8 +193,8 @@ async function sendBuyButton(interaction, message = 'Unlock **GameDay Channels P
     components: [{
       type: 1, // ActionRow
       components: [{
-        type: 2,       // Button
-        style: 6,      // Premium purchase button
+        type: 2,   // Button
+        style: 6,  // Premium purchase button
         sku_id: String(GUILD_PRO_SKU_ID),
         label: 'Unlock Pro'
       }]
@@ -208,8 +208,8 @@ async function sendBuyButton(interaction, message = 'Unlock **GameDay Channels P
     } else {
       await interaction.reply(payload);
     }
-  } catch (e) {
-    // Fallback: Link button to your listing if Premium button is rejected
+  } catch {
+    // Fallback: Link button
     const url = `https://discord.com/application-directory/${APP_ID}`;
     const linkPayload = {
       content: message,
@@ -217,7 +217,7 @@ async function sendBuyButton(interaction, message = 'Unlock **GameDay Channels P
         type: 1,
         components: [{
           type: 2,
-          style: 5,   // Link
+          style: 5, // Link
           url,
           label: 'Open Pro Listing'
         }]

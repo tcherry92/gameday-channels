@@ -13,6 +13,7 @@ import {
   TextInputStyle,
   ActionRowBuilder,
   ButtonBuilder,
+  EmbedBuilder,
   ButtonStyle,
   MessageFlags,          // include here so you don't import discord.js twice
 } from 'discord.js';
@@ -32,6 +33,9 @@ const NFL_2025_BUNDLED = path.join(__dirname, 'data', 'nfl_2025.json');
 
 // Guild schedule files live on disk
 const scheduleFile = (guildId) => path.join(DATA_DIR, `schedule-${guildId}.json`);
+
+const APP_DIR_URL = `https://discord.com/application-directory/${APP_ID}`;
+const INVITE_URL  = `https://discord.com/oauth2/authorize?client_id=${APP_ID}&scope=bot%20applications.commands&permissions=0`;
 
 // Undici tuning
 setGlobalDispatcher(new Agent({ keepAliveTimeout: 10, headersTimeout: 0 }));
@@ -134,6 +138,39 @@ function normalizeTeam(input) {
 }
 const titleCase = s => String(s).toLowerCase().split(/\s+/).map(w => w[0]?.toUpperCase()+w.slice(1)).join(' ');
 const safeChannelName = s => s.toLowerCase().replace(/[^a-z0-9-]/g,'-').replace(/--+/g,'-');
+
+function buildWelcomeCard(guild) {
+  const embed = new EmbedBuilder()
+    .setTitle('🏈 Welcome to GameDay Channels')
+    .setDescription(
+      [
+        'Thanks for installing **GameDay Channels**!',
+        '',
+        '**Quick start**',
+        '1. Run `/setup-season` → choose **nfl_2025** (preloaded) or **manual**.',
+        '2. Use `/make-week` to auto-create game channels for a week.',
+        '3. Add games with `/add-match` or `/manual-add`.',
+        '4. (Optional) Use `/team-assign` so fans get tagged when weeks are created.',
+        '',
+        '💎 Unlock **Pro** for bulk import, unlimited weeks beyond the free limit, and quality-of-life tools.'
+      ].join('\n')
+    )
+    .setFooter({ text: 'GameDay Channels • Ready for kickoff' });
+
+  // Two safe buttons (Purchase buttons can vary per version — use Link here)
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setLabel('Upgrade to Pro')
+      .setStyle(ButtonStyle.Link)
+      .setURL(APP_DIR_URL),
+    new ButtonBuilder()
+      .setLabel('Invite to another server')
+      .setStyle(ButtonStyle.Link)
+      .setURL(INVITE_URL)
+  );
+
+  return { embeds: [embed], components: [row] };
+}
 
 // ---------- Monetization helpers (NEW) ----------
 async function guildHasPro(_client, guildId) {
@@ -509,6 +546,10 @@ const commands = [
   description: 'Remove the ✅ from THIS channel name.',
 },
   {
+  name: 'help',
+  description: 'How to use GameDay Channels'
+},
+  {
   name: 'team-assign',
   description: 'Assign a user to a team (they will be pinged on match channels)',
   options: [
@@ -589,6 +630,24 @@ async function registerCommandsAuto(appId, token, commands, devGuildId, attempt 
   }
 }
 
+client.on('guildCreate', async (guild) => {
+  try {
+    // Find a channel we can talk in
+    const target =
+      guild.systemChannel ??
+      guild.channels.cache.find(
+        c => c.type === ChannelType.GuildText &&
+             c.permissionsFor(guild.members.me)?.has(PermissionFlagsBits.SendMessages)
+      );
+
+    if (!target) return;
+
+    await target.send(buildWelcomeCard(guild));
+  } catch (e) {
+    console.error('guildCreate welcome failed:', e);
+  }
+});
+
 client.once('clientReady', async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 
@@ -659,6 +718,40 @@ client.on('interactionCreate', async (interaction) => {
       }
       return;
     }
+
+    if (interaction.commandName === 'help') {
+  const embed = new EmbedBuilder()
+    .setTitle('📖 GameDay Channels — Quick Guide')
+    .setDescription(
+      [
+        '**Setup**',
+        '• `/setup-season` → choose **nfl_2025** (preloaded) or **manual**',
+        '• `/make-week` → create channels for all games in a week',
+        '• `/add-match` or `/manual-add` → add a game if needed',
+        '',
+        '**Teams & Tagging**',
+        '• `/team-assign team:<Team> user:@User` → tag fans when weeks are created',
+        '• `/team-list` to see assignments',
+        '',
+        '**Finishing Games**',
+        '• `/complete` / `/uncomplete` → mark channels done',
+        '',
+        '**Bulk / Admin (Pro)**',
+        '• `/bulk-import` or `/import-schedule` → paste many games',
+        '• `/cleanup-week` → remove a full week category',
+        '',
+        '💎 `/upgrade` to unlock Pro features.'
+      ].join('\n')
+    );
+
+  const actions = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setLabel('Upgrade to Pro').setStyle(ButtonStyle.Link).setURL(APP_DIR_URL),
+    new ButtonBuilder().setLabel('Invite the Bot').setStyle(ButtonStyle.Link).setURL(INVITE_URL)
+  );
+
+  await interaction.reply({ embeds: [embed], components: [actions], flags: MessageFlags.Ephemeral });
+  return;
+}
 
 // /team-assign
 if (interaction.commandName === 'team-assign') {

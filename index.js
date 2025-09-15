@@ -274,6 +274,41 @@ async function getOrCreateTextChannel(guild, name, parentId /*, overwrites */) {
   });
 }
 
+// ---------- Team assignments (persisted to /disk) ----------
+const TEAM_ASSIGN_FILE = guildId => path.join(DATA_DIR, `team-assign-${guildId}.json`);
+const TEAM_ASSIGN = new Map(); // guildId -> { [CanonicalTeam]: Set<userId> }
+
+async function loadTeamAssign(guildId) {
+  const fp = TEAM_ASSIGN_FILE(guildId);
+  if (await fs.pathExists(fp)) {
+    const raw = await fs.readJSON(fp).catch(()=>null);
+    if (raw && typeof raw === 'object') {
+      const map = {};
+      for (const [team, arr] of Object.entries(raw)) map[team] = new Set(arr || []);
+      TEAM_ASSIGN.set(guildId, map);
+      return map;
+    }
+  }
+  const fresh = {};
+  TEAM_ASSIGN.set(guildId, fresh);
+  return fresh;
+}
+async function saveTeamAssign(guildId) {
+  const map = TEAM_ASSIGN.get(guildId) || {};
+  const json = {};
+  for (const [team, set] of Object.entries(map)) json[team] = Array.from(set);
+  await fs.writeJSON(TEAM_ASSIGN_FILE(guildId), json, { spaces: 2 }).catch(()=>{});
+}
+
+function getAssignedSet(guildId, team) {
+  const map = TEAM_ASSIGN.get(guildId) || {};
+  const t = (normalizeTeam(team).canonical);
+  map[t] = map[t] || new Set();
+  TEAM_ASSIGN.set(guildId, map);
+  return map[t];
+}
+
+
 // ---------- Schedule storage ----------
 const SCHEDULES = new Map(); // guildId -> { source, weeks: { [n]: [{home, away}] } }
 async function loadSchedule(guildId) {
@@ -316,10 +351,40 @@ async function makeWeek(interaction, week, role) {
   const cat = await getOrCreateCategory(interaction.guild, `Week ${week}`, overwrites);
   const created = [];
   for (const { home, away } of games) {
-    const chName = `${home}-vs-${away}`;
-    await getOrCreateTextChannel(interaction.guild, chName, cat.id, overwrites);
-    created.push(`#${safeChannelName(chName)}`);
+  const chName = `${home}-vs-${away}`;
+  const ch = await getOrCreateTextChannel(interaction.guild, chName, cat.id);
+
+  // Assigned users
+  const assignMap = TEAM_ASSIGN.get(guildId) || {};
+  const homeSet = assignMap[home] || new Set();
+  const awaySet = assignMap[away] || new Set();
+  const homeIds = Array.from(homeSet);
+  const awayIds = Array.from(awaySet);
+
+  // If the category is private (role provided), let assigned users in
+  if (role && (homeIds.length || awayIds.length)) {
+    for (const uid of new Set([...homeIds, ...awayIds])) {
+      try {
+        await ch.permissionOverwrites.edit(uid, { ViewChannel: true });
+      } catch {}
+    }
   }
+
+  // Post kickoff message with controlled mentions
+  const mentions = [...new Set([...homeIds, ...awayIds])];
+  const allowMentions = { parse: [], users: mentions };
+  const lines = [
+    `**${home} vs ${away}**`,
+    homeIds.length ? `Home fans: ${homeIds.map(id=>`<@${id}>`).join(' ')}` : '',
+    awayIds.length ? `Away fans: ${awayIds.map(id=>`<@${id}>`).join(' ')}` : ''
+  ].filter(Boolean).join('\n');
+
+  try {
+    if (lines) await ch.send({ content: lines, allowedMentions: allowMentions });
+  } catch {}
+
+  created.push(`#${safeChannelName(chName)}`);
+}
   await interaction.editReply(`✅ Week ${week} ready.\n${created.join(', ')}`);
 }
 
@@ -443,6 +508,32 @@ const commands = [
   name: 'uncomplete',
   description: 'Remove the ✅ from THIS channel name.',
 },
+  {
+  name: 'team-assign',
+  description: 'Assign a user to a team (they will be pinged on match channels)',
+  options: [
+    { type: 3, name: 'team', description: 'Team name or abbrev', required: true },
+    { type: 6, name: 'user', description: 'User to assign', required: true }
+  ],
+  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+},
+{
+  name: 'team-unassign',
+  description: 'Remove a user from a team',
+  options: [
+    { type: 3, name: 'team', description: 'Team name or abbrev', required: true },
+    { type: 6, name: 'user', description: 'User to remove', required: true }
+  ],
+  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+},
+{
+  name: 'team-list',
+  description: 'Show assigned users for a team (or all teams)',
+  options: [
+    { type: 3, name: 'team', description: 'Optional: specific team', required: false }
+  ],
+  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+},
   { name: 'check-pro', description: 'Check if Pro is active for this server' },
   {
   name: 'debug-week',
@@ -531,6 +622,8 @@ client.on('interactionCreate', async (interaction) => {
   // Always load schedule for this guild
   const guildId = interaction.guildId;
   await loadSchedule(guildId);
+  // Always load schedule AND team-assign for this guild
+  await loadTeamAssign(guildId);
 
   // ---------- Slash commands ----------
   if (interaction.isChatInputCommand()) {
@@ -567,7 +660,62 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
+// /team-assign
+if (interaction.commandName === 'team-assign') {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const teamIn = interaction.options.getString('team', true);
+  const user = interaction.options.getUser('user', true);
 
+  const team = normalizeTeam(teamIn).canonical;
+  const set = getAssignedSet(guildId, team);
+  set.add(user.id);
+  await saveTeamAssign(guildId);
+
+  await interaction.editReply(`✅ Assigned <@${user.id}> to **${team}**.`);
+  return;
+}
+
+// /team-unassign
+if (interaction.commandName === 'team-unassign') {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const teamIn = interaction.options.getString('team', true);
+  const user = interaction.options.getUser('user', true);
+
+  const team = normalizeTeam(teamIn).canonical;
+  const set = getAssignedSet(guildId, team);
+  const had = set.delete(user.id);
+  await saveTeamAssign(guildId);
+
+  await interaction.editReply(had
+    ? `🗑️ Removed <@${user.id}> from **${team}**.`
+    : `⚠️ <@${user.id}> was not assigned to **${team}**.`);
+  return;
+}
+
+// /team-list
+if (interaction.commandName === 'team-list') {
+  const teamIn = interaction.options.getString('team');
+  const map = TEAM_ASSIGN.get(guildId) || {};
+
+  if (teamIn) {
+    const team = normalizeTeam(teamIn).canonical;
+    const set = map[team] || new Set();
+    const mentions = Array.from(set).map(id => `<@${id}>`).join(' ') || '_none_';
+    await interaction.reply({ content: `**${team}**: ${mentions}`, flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  // all teams summary
+  const lines = Object.entries(map).length
+    ? Object.entries(map)
+        .sort(([a],[b]) => a.localeCompare(b))
+        .map(([t, s]) => `• **${t}** (${s.size}): ${Array.from(s).map(id=>`<@${id}>`).join(' ') || '_none_'}`)
+        .join('\n')
+    : '_no assignments_';
+
+  await interaction.reply({ content: `**Team Assignments**\n${lines}`, flags: MessageFlags.Ephemeral });
+  return;
+}
   // /complete
 if (interaction.commandName === 'complete') {
   const guildId = interaction.guildId;

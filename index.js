@@ -56,6 +56,7 @@ async function requireProGuild(interaction, featureName = 'this feature') {
 
 
 
+const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
 const token = process.env.DISCORD_TOKEN;
 const devGuildId = process.env.GUILD_ID;
@@ -135,42 +136,38 @@ const titleCase = s => String(s).toLowerCase().split(/\s+/).map(w => w[0]?.toUpp
 const safeChannelName = s => s.toLowerCase().replace(/[^a-z0-9-]/g,'-').replace(/--+/g,'-');
 
 // ---------- Monetization helpers (NEW) ----------
-async function guildHasPro(client, guildId) {
+async function guildHasPro(_client, guildId) {
   try {
     if (!APP_ID || !GUILD_PRO_SKU_ID) {
       console.warn('guildHasPro: missing APP_ID or GUILD_PRO_SKU_ID');
       return false;
     }
 
-    // Normalize types
     const appId = String(APP_ID);
     const skuId = String(GUILD_PRO_SKU_ID);
     const gId   = String(guildId);
 
-    // Fetch entitlements for this app, filtering by guild + sku
-    const entitlements = await client.rest.get(
-      Routes.applicationEntitlements(appId),
+    // NOTE: Routes.applicationEntitlements(...) may not exist in your build.
+    // Use the raw path instead:
+    const entitlements = await rest.get(
+      `/applications/${appId}/entitlements`,
       {
-        // IMPORTANT: sku_ids must be an array; all values should be strings
         query: {
           guild_id: gId,
-          sku_ids: [skuId],
+          sku_ids: [skuId],        // must be an ARRAY of strings
           exclude_expired: true
         }
       }
     );
 
-    // Debug log (safe + concise)
     const count = Array.isArray(entitlements) ? entitlements.length : 0;
     console.log(`guildHasPro: guild=${gId} sku=${skuId} entitlements=${count}`);
     if (count) {
-      // Optional: print the first entitlement’s key fields
       const e = entitlements[0];
       console.log('guildHasPro: first entitlement =>',
         { id: e?.id, sku_id: e?.sku_id, guild_id: e?.guild_id, starts_at: e?.starts_at, ends_at: e?.ends_at });
     }
-
-    return Array.isArray(entitlements) && entitlements.length > 0;
+    return count > 0;
   } catch (e) {
     console.warn('guildHasPro error:', e?.status, e?.code, e?.message || e);
     return false;

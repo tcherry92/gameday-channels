@@ -24,6 +24,15 @@ import { setGlobalDispatcher, Agent } from 'undici';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
+const token = process.env.DISCORD_TOKEN;
+const devGuildId = process.env.GUILD_ID;
+const APP_ID = process.env.APP_ID;                 // NEW
+const GUILD_PRO_SKU_ID = process.env.GUILD_PRO_SKU_ID; // NEW
+
+const APP_DIR_URL = `https://discord.com/application-directory/${APP_ID}`;
+const INVITE_URL  = `https://discord.com/oauth2/authorize?client_id=${APP_ID}&scope=bot%20applications.commands&permissions=0`;
+
+
 // Persistent disk for dynamic guild data
 const DATA_DIR = process.env.DATA_DIR || '/disk';
 await fs.ensureDir(DATA_DIR);
@@ -33,9 +42,6 @@ const NFL_2025_BUNDLED = path.join(__dirname, 'data', 'nfl_2025.json');
 
 // Guild schedule files live on disk
 const scheduleFile = (guildId) => path.join(DATA_DIR, `schedule-${guildId}.json`);
-
-const APP_DIR_URL = `https://discord.com/application-directory/${APP_ID}`;
-const INVITE_URL  = `https://discord.com/oauth2/authorize?client_id=${APP_ID}&scope=bot%20applications.commands&permissions=0`;
 
 // Undici tuning
 setGlobalDispatcher(new Agent({ keepAliveTimeout: 10, headersTimeout: 0 }));
@@ -62,10 +68,7 @@ async function requireProGuild(interaction, featureName = 'this feature') {
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
-const token = process.env.DISCORD_TOKEN;
-const devGuildId = process.env.GUILD_ID;
-const APP_ID = process.env.APP_ID;                 // NEW
-const GUILD_PRO_SKU_ID = process.env.GUILD_PRO_SKU_ID; // NEW
+
 
 // Free tier: allow creating up to this many weeks without Pro
 const FREE_WEEK_LIMIT = 18; // change to 0 if you want everything gated

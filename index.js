@@ -136,20 +136,43 @@ const safeChannelName = s => s.toLowerCase().replace(/[^a-z0-9-]/g,'-').replace(
 
 // ---------- Monetization helpers (NEW) ----------
 async function guildHasPro(client, guildId) {
-  if (!APP_ID || !GUILD_PRO_SKU_ID) return false; // if not configured, treat as no Pro
   try {
+    if (!APP_ID || !GUILD_PRO_SKU_ID) {
+      console.warn('guildHasPro: missing APP_ID or GUILD_PRO_SKU_ID');
+      return false;
+    }
+
+    // Normalize types
+    const appId = String(APP_ID);
+    const skuId = String(GUILD_PRO_SKU_ID);
+    const gId   = String(guildId);
+
+    // Fetch entitlements for this app, filtering by guild + sku
     const entitlements = await client.rest.get(
-      Routes.applicationEntitlements(APP_ID),
+      Routes.applicationEntitlements(appId),
       {
+        // IMPORTANT: sku_ids must be an array; all values should be strings
         query: {
-          guild_id: guildId,
-          sku_ids: GUILD_PRO_SKU_ID,
+          guild_id: gId,
+          sku_ids: [skuId],
           exclude_expired: true
         }
       }
     );
+
+    // Debug log (safe + concise)
+    const count = Array.isArray(entitlements) ? entitlements.length : 0;
+    console.log(`guildHasPro: guild=${gId} sku=${skuId} entitlements=${count}`);
+    if (count) {
+      // Optional: print the first entitlement’s key fields
+      const e = entitlements[0];
+      console.log('guildHasPro: first entitlement =>',
+        { id: e?.id, sku_id: e?.sku_id, guild_id: e?.guild_id, starts_at: e?.starts_at, ends_at: e?.ends_at });
+    }
+
     return Array.isArray(entitlements) && entitlements.length > 0;
-  } catch {
+  } catch (e) {
+    console.warn('guildHasPro error:', e?.status, e?.code, e?.message || e);
     return false;
   }
 }
@@ -422,6 +445,7 @@ const commands = [
   name: 'uncomplete',
   description: 'Remove the ✅ from THIS channel name.',
 },
+  { name: 'check-pro', description: 'Check if Pro is active for this server' },
   {
   name: 'debug-week',
   description: 'Show how many games the bot sees for a week',
@@ -661,6 +685,15 @@ if (interaction.commandName === 'uncomplete') {
       return;
     }
 
+    if (interaction.commandName === 'check-pro') {
+      const isPro = await guildHasPro(client, interaction.guildId);
+      await interaction.reply({
+         content: isPro ? '✅ Pro is active for this server!' : '❌ No Pro subscription found.',
+         flags: MessageFlags.Ephemeral
+      });
+      return;
+    }
+    
     // /add-match (adds & builds)
     if (interaction.commandName === 'add-match') {
       const week = interaction.options.getInteger('week', true);

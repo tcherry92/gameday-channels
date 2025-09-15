@@ -180,18 +180,21 @@ async function guildHasPro(client, guildId) {
 async function sendBuyButton(interaction, message = 'Unlock **GameDay Channels Pro** for this server:') {
   if (!GUILD_PRO_SKU_ID) {
     const warn = '⚠️ Purchase not configured. Ask the owner to set GUILD_PRO_SKU_ID.';
-    const fn = (interaction.deferred || interaction.replied) ? 'editReply' : 'reply';
-    return interaction[fn]({ content: warn, flags: MessageFlags.Ephemeral });
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply({ content: warn, flags: MessageFlags.Ephemeral });
+    } else {
+      await interaction.reply({ content: warn, flags: MessageFlags.Ephemeral });
+    }
+    return;
   }
 
-  // Raw JSON Premium button (works on discord.js v14)
   const payload = {
     content: message,
     components: [{
       type: 1, // ActionRow
       components: [{
-        type: 2,        // Button
-        style: 6,       // Premium purchase button
+        type: 2,       // Button
+        style: 6,      // Premium purchase button
         sku_id: String(GUILD_PRO_SKU_ID),
         label: 'Unlock Pro'
       }]
@@ -199,29 +202,36 @@ async function sendBuyButton(interaction, message = 'Unlock **GameDay Channels P
     flags: MessageFlags.Ephemeral
   };
 
-  const fn = (interaction.deferred || interaction.replied) ? 'editReply' : 'reply';
-
   try {
-    return await interaction[fn](payload);
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply(payload);
+    } else {
+      await interaction.reply(payload);
+    }
   } catch (e) {
-    // Fallback: Link button to your app listing if Premium button is rejected
+    // Fallback: Link button to your listing if Premium button is rejected
     const url = `https://discord.com/application-directory/${APP_ID}`;
-    return interaction[fn]({
+    const linkPayload = {
       content: message,
       components: [{
         type: 1,
         components: [{
           type: 2,
-          style: 5,           // Link
+          style: 5,   // Link
           url,
           label: 'Open Pro Listing'
         }]
       }],
       flags: MessageFlags.Ephemeral
-    });
+    };
+
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply(linkPayload);
+    } else {
+      await interaction.reply(linkPayload);
+    }
   }
 }
-
   // As a final safety, if style:6 is rejected by this gateway, send a Link button to your store page
   const payload = { content: message, components, flags: MessageFlags.Ephemeral };
   try {

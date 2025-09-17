@@ -430,29 +430,56 @@ async function makeWeek(interaction, week, role) {
 
 // ---------- Preload from bundled local file (no network) ----------
 // ---------- Read bundled NFL 2025 (repo only) ----------
+function sanitizeBundledSeason(json) {
+  const out = { weeks: {} };
+
+  for (const rawKey of Object.keys(json?.weeks || {})) {
+    const weekKey = String(rawKey).trim();                  // fix "18 "
+    const arr = Array.isArray(json.weeks[rawKey]) ? json.weeks[rawKey] : [];
+    const cleaned = [];
+
+    for (const item of arr) {
+      if (!item || typeof item !== 'object') continue;
+
+      // normalize strings & strip sneaky whitespace/unicode
+      const home = String(item.home ?? '').replace(/\s+/g, ' ').trim();
+      const away = String(item.away ?? '').replace(/\s+/g, ' ').trim();
+      if (!home || !away) continue;
+
+      // de-dupe within a week after normalization
+      const key = `${home}::${away}`;
+      if (!cleaned.some(x => `${x.home}::${x.away}` === key)) {
+        cleaned.push({ home, away });
+      }
+    }
+
+    // only keep non-empty weeks
+    if (cleaned.length) out.weeks[weekKey] = cleaned;
+  }
+  return out;
+}
+
 async function readBundled2025Raw() {
   const exists = await fs.pathExists(NFL_2025_BUNDLED);
   if (!exists) throw new Error(`Missing bundled file: ${NFL_2025_BUNDLED}`);
 
   const text = await fs.readFile(NFL_2025_BUNDLED, 'utf8');
-  const approxGames = (text.match(/"home"\s*:/g) || []).length;
-  console.log(`📄 Loaded nfl_2025.json (bundled) games≈${approxGames}`);
-  return JSON.parse(text);
+  const parsed = JSON.parse(text);
+  const json = sanitizeBundledSeason(parsed);
+
+  const approxGames = Object.values(json.weeks).reduce((n, a) => n + a.length, 0);
+  console.log(`📄 nfl_2025.json sanitized → weeks=${Object.keys(json.weeks).length} games=${approxGames}`);
+  return json;
 }
 
-// ---------- Preload from bundled into guild schedule on disk ----------
 async function preloadFromBundled2025(guildId) {
   const json = await readBundled2025Raw();
 
-  if (!json || typeof json !== 'object' || typeof json.weeks !== 'object') {
-    throw new Error('Invalid format in nfl_2025.json (expected { weeks: { "1": [ ... ] } })');
-  }
-
   const weekKeys = Object.keys(json.weeks).sort((a, b) => Number(a) - Number(b));
-  const summary  = weekKeys.map(w => `${w}:${Array.isArray(json.weeks[w]) ? json.weeks[w].length : 0}`).join(' ');
+  const summary  = weekKeys.map(w => `${w}:${json.weeks[w].length}`).join(' ');
 
   // Persist to disk as this guild’s active schedule
-  const data = { source: 'nfl_2025', weeks: json.weeks || {} };
+  const data = { source: 'nfl_2025', weeks: json.weeks };
   SCHEDULES.set(guildId, data);
   await saveSchedule(guildId);
 

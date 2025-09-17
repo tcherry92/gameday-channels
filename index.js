@@ -178,7 +178,7 @@ function buildWelcomeCard(guild) {
       '1. Run `/setup-season` → choose **nfl_2025** (preloaded) or **manual**.',
       '2. Use `/make-week` to auto-create game channels for a week.',
       '3. Add games with `/add-match` or `/manual-add`.',
-      '4. (Optional) Use `/team-assign` so fans get tagged when weeks are created.',
+      '4. (Optional) Use `/team-assign` so coaches get tagged when weeks are created.',
       '',
       '💎 Unlock **Pro** for bulk import, unlimited weeks beyond the free limit, and quality-of-life tools.'
     ].join('\n')
@@ -290,11 +290,8 @@ async function sendBuyButton(interaction, message = 'Unlock **GameDay Channels P
   }
 }
 
-async function buildOverwrites(guild, role) {
-  let me = guild.members.me;
-  if (!me) {
-    me = await guild.members.fetchMe();
-  }
+function buildOverwrites(guild, role) {
+  const me = guild.members.me;
   const base = [
     { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
     { id: me.id, allow: [
@@ -437,7 +434,7 @@ async function makeWeek(interaction, week, role) {
     await interaction.editReply({ embeds: [buildErrorEmbed(`⚠️ No games found for Week ${week}. Add with /manual-add or /add-match.`)] });
     return;
   }
-  const overwrites = await buildOverwrites(interaction.guild, role);
+  const overwrites = buildOverwrites(interaction.guild, role);
   const cat = await getOrCreateCategory(interaction.guild, week, overwrites);
   const created = [];
   for (const { home, away } of games) {
@@ -465,8 +462,8 @@ async function makeWeek(interaction, week, role) {
     const allowMentions = { parse: [], users: mentions };
     const lines = [
       `**${home} vs ${away}**`,
-      homeIds.length ? `Home fans: ${homeIds.map(id=>`<@${id}>`).join(' ')}` : '',
-      awayIds.length ? `Away fans: ${awayIds.map(id=>`<@${id}>`).join(' ')}` : ''
+      homeIds.length ? `Home coaches: ${homeIds.map(id=>`<@${id}>`).join(' ')}` : '',
+      awayIds.length ? `Away coaches: ${awayIds.map(id=>`<@${id}>`).join(' ')}` : ''
     ].filter(Boolean).join('\n');
 
     try {
@@ -667,8 +664,8 @@ const commands = [
     default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
   },
   {
-    name: 'ping-fans',
-    description: 'Ping assigned fans for a specific week.',
+    name: 'ping-coaches',
+    description: 'Ping assigned coaches for a specific week.',
     options: [
       { type: 4, name: 'week', description: 'Week number', required: true }
     ],
@@ -694,11 +691,9 @@ function makeUncompletedName(name) {
 
 async function purgeAllWeekCategories(guild) {
   let deleted = 0, errors = 0;
-  const config = await loadConfig(guild.id);
-  const prefix = config.categoryPrefix || 'Week';
   const categories = guild.channels.cache.filter(c => 
     c.type === ChannelType.GuildCategory && 
-    c.name.toLowerCase().includes(`${prefix.toLowerCase()} `)
+    c.name.toLowerCase().includes('week ')
   );
   for (const [, cat] of categories) {
     const children = guild.channels.cache.filter(c => c.parentId === cat.id);
@@ -812,10 +807,10 @@ client.on('interactionCreate', async (interaction) => {
           embed = buildInfoEmbed(
             'Teams & Tagging',
             [
-              '• `/team-assign team:<Team> user:@User` → tag fans when weeks are created',
+              '• `/team-assign team:<Team> user:@User` → tag coaches when weeks are created',
               '• `/team-unassign` → remove assignment',
               '• `/team-list` → see assignments',
-              '• `/ping-fans` → remind fans for a week (Pro)'
+              '• `/ping-coaches` → remind coaches for a week (Pro)'
             ].join('\n')
           );
           break;
@@ -884,7 +879,7 @@ client.on('interactionCreate', async (interaction) => {
           '• `/add-match` or `/manual-add` → add a game if needed',
           '',
           '**Teams & Tagging**',
-          '• `/team-assign team:<Team> user:@User` → tag fans when weeks are created',
+          '• `/team-assign team:<Team> user:@User` → tag coaches when weeks are created',
           '• `/team-list` to see assignments',
           '',
           '**Finishing Games**',
@@ -1225,9 +1220,9 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    // /ping-fans
-    if (interaction.commandName === 'ping-fans') {
-      if (!(await requireProGuild(interaction, 'Ping Fans'))) return;
+    // /ping-coaches
+    if (interaction.commandName === 'ping-coaches') {
+      if (!(await requireProGuild(interaction, 'Ping coaches'))) return;
 
       const week = interaction.options.getInteger('week', true);
       const data = SCHEDULES.get(guildId) || { weeks: {} };
@@ -1247,7 +1242,7 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       if (allUsers.size === 0) {
-        await interaction.reply({ embeds: [buildErrorEmbed('No fans assigned to teams in this week.')], flags: MessageFlags.Ephemeral });
+        await interaction.reply({ embeds: [buildErrorEmbed('No coaches assigned to teams in this week.')], flags: MessageFlags.Ephemeral });
         return;
       }
 
@@ -1270,7 +1265,7 @@ client.on('interactionCreate', async (interaction) => {
 
       try {
         await summaryChannel.send(message);
-        await interaction.reply({ embeds: [buildSuccessEmbed('Fans Pinged', `✅ Pinged ${allUsers.size} fans in #${summaryChannel.name}`)] });
+        await interaction.reply({ embeds: [buildSuccessEmbed('Coaches Pinged', `✅ Pinged ${allUsers.size} coaches in #${summaryChannel.name}`)] });
       } catch (e) {
         await interaction.reply({ embeds: [buildErrorEmbed('Failed to send ping message. Check permissions.')], flags: MessageFlags.Ephemeral });
       }

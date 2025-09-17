@@ -15,7 +15,8 @@ import {
   ButtonBuilder,
   EmbedBuilder,
   ButtonStyle,
-  MessageFlags,          // include here so you don't import discord.js twice
+  MessageFlags,
+  ComponentType,
 } from 'discord.js';
 import { fileURLToPath } from 'url';
 import { setGlobalDispatcher, Agent } from 'undici';
@@ -26,12 +27,13 @@ const __dirname  = path.dirname(__filename);
 
 const token = process.env.DISCORD_TOKEN;
 const devGuildId = process.env.GUILD_ID;
-const APP_ID = process.env.APP_ID;                 // NEW
-const GUILD_PRO_SKU_ID = process.env.GUILD_PRO_SKU_ID; // NEW
+const APP_ID = process.env.APP_ID;
+const GUILD_PRO_SKU_ID = process.env.GUILD_PRO_SKU_ID;
 
 const APP_DIR_URL = `https://discord.com/application-directory/${APP_ID}`;
 const INVITE_URL  = `https://discord.com/oauth2/authorize?client_id=${APP_ID}&scope=bot%20applications.commands&permissions=0`;
 
+const NFL_LOGO_URL = 'https://1000logos.net/wp-content/uploads/2017/05/NFL-logo.png';
 
 // Persistent disk for dynamic guild data
 const DATA_DIR = process.env.DATA_DIR || '/disk';
@@ -43,6 +45,9 @@ const NFL_2025_BUNDLED = path.join(__dirname, 'data', 'nfl_2025.json');
 // Guild schedule files live on disk
 const scheduleFile = (guildId) => path.join(DATA_DIR, `schedule-${guildId}.json`);
 
+// Guild config files
+const configFile = (guildId) => path.join(DATA_DIR, `config-${guildId}.json`);
+
 // Undici tuning
 setGlobalDispatcher(new Agent({ keepAliveTimeout: 10, headersTimeout: 0 }));
 
@@ -51,10 +56,9 @@ async function requireProGuild(interaction, featureName = 'this feature') {
   const isPro = await guildHasPro(client, interaction.guildId);
   if (isPro) return true;
 
-  // If the interaction was already deferred, edit; otherwise reply
   const msg = `🔒 **Pro required** to use **${featureName}** on this server.`;
   if (interaction.deferred || interaction.replied) {
-    await interaction.editReply({ content: msg, components: [], flags: MessageFlags.Ephemeral }).catch(()=>{});
+    await interaction.editReply({ embeds: [buildErrorEmbed(msg)], components: [] }).catch(()=>{});
     await sendBuyButton(interaction, msg);
   } else {
     await sendBuyButton(interaction, msg);
@@ -62,17 +66,10 @@ async function requireProGuild(interaction, featureName = 'this feature') {
   return false;
 }
 
-
-
-
-
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
-
-
 // Free tier: allow creating up to this many weeks without Pro
-const FREE_WEEK_LIMIT = 18; // change to 0 if you want everything gated
-
+const FREE_WEEK_LIMIT = 18;
 
 await fs.ensureDir(DATA_DIR);
 
@@ -142,25 +139,50 @@ function normalizeTeam(input) {
 const titleCase = s => String(s).toLowerCase().split(/\s+/).map(w => w[0]?.toUpperCase()+w.slice(1)).join(' ');
 const safeChannelName = s => s.toLowerCase().replace(/[^a-z0-9-]/g,'-').replace(/--+/g,'-');
 
-function buildWelcomeCard(guild) {
-  const embed = new EmbedBuilder()
-    .setTitle('🏈 Welcome to GameDay Channels')
-    .setDescription(
-      [
-        'Thanks for installing **GameDay Channels**!',
-        '',
-        '**Quick start**',
-        '1. Run `/setup-season` → choose **nfl_2025** (preloaded) or **manual**.',
-        '2. Use `/make-week` to auto-create game channels for a week.',
-        '3. Add games with `/add-match` or `/manual-add`.',
-        '4. (Optional) Use `/team-assign` so fans get tagged when weeks are created.',
-        '',
-        '💎 Unlock **Pro** for bulk import, unlimited weeks beyond the free limit, and quality-of-life tools.'
-      ].join('\n')
-    )
-    .setFooter({ text: 'GameDay Channels • Ready for kickoff' });
+// ---------- Embed Helpers ----------
+function buildSuccessEmbed(title, description, thumbnail = NFL_LOGO_URL) {
+  return new EmbedBuilder()
+    .setTitle(title)
+    .setDescription(description)
+    .setColor(0x00FF00) // Green
+    .setThumbnail(thumbnail)
+    .setFooter({ text: 'GameDay Channels • v1.0' });
+}
 
-  // Two safe buttons (Purchase buttons can vary per version — use Link here)
+function buildErrorEmbed(description, thumbnail = NFL_LOGO_URL) {
+  return new EmbedBuilder()
+    .setTitle('❌ Error')
+    .setDescription(description)
+    .setColor(0xFF0000) // Red
+    .setThumbnail(thumbnail)
+    .setFooter({ text: 'GameDay Channels • v1.0' });
+}
+
+function buildInfoEmbed(title, description, thumbnail = NFL_LOGO_URL) {
+  return new EmbedBuilder()
+    .setTitle(title)
+    .setDescription(description)
+    .setColor(0x0099FF) // Blue
+    .setThumbnail(thumbnail)
+    .setFooter({ text: 'GameDay Channels • v1.0' });
+}
+
+function buildWelcomeCard(guild) {
+  const embed = buildInfoEmbed(
+    '🏈 Welcome to GameDay Channels',
+    [
+      'Thanks for installing **GameDay Channels**!',
+      '',
+      '**Quick start**',
+      '1. Run `/setup-season` → choose **nfl_2025** (preloaded) or **manual**.',
+      '2. Use `/make-week` to auto-create game channels for a week.',
+      '3. Add games with `/add-match` or `/manual-add`.',
+      '4. (Optional) Use `/team-assign` so fans get tagged when weeks are created.',
+      '',
+      '💎 Unlock **Pro** for bulk import, unlimited weeks beyond the free limit, and quality-of-life tools.'
+    ].join('\n')
+  );
+
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setLabel('Upgrade to Pro')
@@ -175,7 +197,7 @@ function buildWelcomeCard(guild) {
   return { embeds: [embed], components: [row] };
 }
 
-// ---------- Monetization helpers (NEW) ----------
+// ---------- Monetization helpers ----------
 async function guildHasPro(_client, guildId) {
   try {
     if (!APP_ID || !GUILD_PRO_SKU_ID) {
@@ -187,14 +209,12 @@ async function guildHasPro(_client, guildId) {
     const skuId = String(GUILD_PRO_SKU_ID);
     const gId   = String(guildId);
 
-    // NOTE: Routes.applicationEntitlements(...) may not exist in your build.
-    // Use the raw path instead:
     const entitlements = await rest.get(
       `/applications/${appId}/entitlements`,
       {
         query: {
           guild_id: gId,
-          sku_ids: [skuId],        // must be an ARRAY of strings
+          sku_ids: [skuId],
           exclude_expired: true
         }
       }
@@ -218,9 +238,9 @@ async function sendBuyButton(interaction, message = 'Unlock **GameDay Channels P
   if (!GUILD_PRO_SKU_ID) {
     const warn = '⚠️ Purchase not configured. Ask the owner to set GUILD_PRO_SKU_ID.';
     if (interaction.deferred || interaction.replied) {
-      await interaction.editReply({ content: warn, flags: MessageFlags.Ephemeral });
+      await interaction.editReply({ embeds: [buildErrorEmbed(warn)] });
     } else {
-      await interaction.reply({ content: warn, flags: MessageFlags.Ephemeral });
+      await interaction.reply({ embeds: [buildErrorEmbed(warn)], flags: MessageFlags.Ephemeral });
     }
     return;
   }
@@ -285,15 +305,19 @@ function buildOverwrites(guild, role) {
 }
 
 async function getOrCreateCategory(guild, name, overwrites) {
+  const config = await loadConfig(guild.id);
+  const prefix = config.categoryPrefix || 'Week';
+  const catName = `${prefix} ${name}`;
+
   const existing = guild.channels.cache.find(
-    c => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === name.toLowerCase()
+    c => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === catName.toLowerCase()
   );
   if (existing) {
     if (overwrites) await existing.permissionOverwrites.set(overwrites).catch(()=>{});
     return existing;
   }
   return guild.channels.create({
-    name,
+    name: catName,
     type: ChannelType.GuildCategory,
     permissionOverwrites: overwrites
   });
@@ -310,13 +334,36 @@ async function getOrCreateTextChannel(guild, name, parentId /*, overwrites */) {
     name: safe,
     type: ChannelType.GuildText,
     parent: parentId
-    // No permissionOverwrites here → inherits from category
   });
 }
 
-// ---------- Team assignments (persisted to /disk) ----------
+// ---------- Config storage ----------
+const CONFIGS = new Map(); // guildId -> { categoryPrefix: string }
+async function loadConfig(guildId) {
+  if (CONFIGS.has(guildId)) return CONFIGS.get(guildId);
+
+  const fp = configFile(guildId);
+  if (await fs.pathExists(fp)) {
+    const raw = await fs.readJSON(fp).catch(()=>null);
+    if (raw && typeof raw === 'object') {
+      CONFIGS.set(guildId, raw);
+      return raw;
+    }
+  }
+  const fresh = { categoryPrefix: 'Week' };
+  CONFIGS.set(guildId, fresh);
+  await saveConfig(guildId);
+  return fresh;
+}
+
+async function saveConfig(guildId) {
+  const config = CONFIGS.get(guildId) || { categoryPrefix: 'Week' };
+  await fs.writeJSON(configFile(guildId), config, { spaces: 2 }).catch(()=>{});
+}
+
+// ---------- Team assignments ----------
 const TEAM_ASSIGN_FILE = guildId => path.join(DATA_DIR, `team-assign-${guildId}.json`);
-const TEAM_ASSIGN = new Map(); // guildId -> { [CanonicalTeam]: Set<userId> }
+const TEAM_ASSIGN = new Map();
 
 async function loadTeamAssign(guildId) {
   const fp = TEAM_ASSIGN_FILE(guildId);
@@ -342,15 +389,14 @@ async function saveTeamAssign(guildId) {
 
 function getAssignedSet(guildId, team) {
   const map = TEAM_ASSIGN.get(guildId) || {};
-  const t = (normalizeTeam(team).canonical);
+  const t = normalizeTeam(team).canonical;
   map[t] = map[t] || new Set();
   TEAM_ASSIGN.set(guildId, map);
   return map[t];
 }
 
-
 // ---------- Schedule storage ----------
-const SCHEDULES = new Map(); // guildId -> { source, weeks: { [n]: [{home, away}] } }
+const SCHEDULES = new Map();
 async function loadSchedule(guildId) {
   const fp = scheduleFile(guildId);
   if (await fs.pathExists(fp)) {
@@ -384,76 +430,73 @@ async function makeWeek(interaction, week, role) {
   const data = SCHEDULES.get(guildId) || { weeks: {} };
   const games = data.weeks[week] || [];
   if (!games.length) {
-    await interaction.editReply(`⚠️ No games found for Week ${week}. Add with /manual-add or /add-match.`);
+    await interaction.editReply({ embeds: [buildErrorEmbed(`⚠️ No games found for Week ${week}. Add with /manual-add or /add-match.`)] });
     return;
   }
   const overwrites = buildOverwrites(interaction.guild, role);
-  const cat = await getOrCreateCategory(interaction.guild, `Week ${week}`, overwrites);
+  const cat = await getOrCreateCategory(interaction.guild, week, overwrites);
   const created = [];
   for (const { home, away } of games) {
-  const chName = `${home}-vs-${away}`;
-  const ch = await getOrCreateTextChannel(interaction.guild, chName, cat.id);
+    const chName = `${home}-vs-${away}`;
+    const ch = await getOrCreateTextChannel(interaction.guild, chName, cat.id);
 
-  // Assigned users
-  const assignMap = TEAM_ASSIGN.get(guildId) || {};
-  const homeSet = assignMap[home] || new Set();
-  const awaySet = assignMap[away] || new Set();
-  const homeIds = Array.from(homeSet);
-  const awayIds = Array.from(awaySet);
+    // Assigned users
+    const assignMap = TEAM_ASSIGN.get(guildId) || {};
+    const homeSet = assignMap[home] || new Set();
+    const awaySet = assignMap[away] || new Set();
+    const homeIds = Array.from(homeSet);
+    const awayIds = Array.from(awaySet);
 
-  // If the category is private (role provided), let assigned users in
-  if (role && (homeIds.length || awayIds.length)) {
-    for (const uid of new Set([...homeIds, ...awayIds])) {
-      try {
-        await ch.permissionOverwrites.edit(uid, { ViewChannel: true });
-      } catch {}
+    // If the category is private (role provided), let assigned users in
+    if (role && (homeIds.length || awayIds.length)) {
+      for (const uid of new Set([...homeIds, ...awayIds])) {
+        try {
+          await ch.permissionOverwrites.edit(uid, { ViewChannel: true });
+        } catch {}
+      }
     }
+
+    // Post kickoff message with controlled mentions
+    const mentions = [...new Set([...homeIds, ...awayIds])];
+    const allowMentions = { parse: [], users: mentions };
+    const lines = [
+      `**${home} vs ${away}**`,
+      homeIds.length ? `Home fans: ${homeIds.map(id=>`<@${id}>`).join(' ')}` : '',
+      awayIds.length ? `Away fans: ${awayIds.map(id=>`<@${id}>`).join(' ')}` : ''
+    ].filter(Boolean).join('\n');
+
+    try {
+      if (lines) await ch.send({ content: lines, allowedMentions: allowMentions });
+    } catch {}
+
+    created.push(`#${safeChannelName(chName)}`);
   }
-
-  // Post kickoff message with controlled mentions
-  const mentions = [...new Set([...homeIds, ...awayIds])];
-  const allowMentions = { parse: [], users: mentions };
-  const lines = [
-    `**${home} vs ${away}**`,
-    homeIds.length ? `Home fans: ${homeIds.map(id=>`<@${id}>`).join(' ')}` : '',
-    awayIds.length ? `Away fans: ${awayIds.map(id=>`<@${id}>`).join(' ')}` : ''
-  ].filter(Boolean).join('\n');
-
-  try {
-    if (lines) await ch.send({ content: lines, allowedMentions: allowMentions });
-  } catch {}
-
-  created.push(`#${safeChannelName(chName)}`);
-}
-  await interaction.editReply(`✅ Week ${week} ready.\n${created.join(', ')}`);
+  const desc = `✅ Week ${week} ready.\n${created.join(', ')}`;
+  await interaction.editReply({ embeds: [buildSuccessEmbed('Week Created', desc)] });
 }
 
-// ---------- Preload from bundled local file (no network) ----------
-// ---------- Read bundled NFL 2025 (repo only) ----------
+// ---------- Preload from bundled local file ----------
 function sanitizeBundledSeason(json) {
   const out = { weeks: {} };
 
   for (const rawKey of Object.keys(json?.weeks || {})) {
-    const weekKey = String(rawKey).trim();                  // fix "18 "
+    const weekKey = String(rawKey).trim();
     const arr = Array.isArray(json.weeks[rawKey]) ? json.weeks[rawKey] : [];
     const cleaned = [];
 
     for (const item of arr) {
       if (!item || typeof item !== 'object') continue;
 
-      // normalize strings & strip sneaky whitespace/unicode
       const home = String(item.home ?? '').replace(/\s+/g, ' ').trim();
       const away = String(item.away ?? '').replace(/\s+/g, ' ').trim();
       if (!home || !away) continue;
 
-      // de-dupe within a week after normalization
       const key = `${home}::${away}`;
       if (!cleaned.some(x => `${x.home}::${x.away}` === key)) {
         cleaned.push({ home, away });
       }
     }
 
-    // only keep non-empty weeks
     if (cleaned.length) out.weeks[weekKey] = cleaned;
   }
   return out;
@@ -478,7 +521,6 @@ async function preloadFromBundled2025(guildId) {
   const weekKeys = Object.keys(json.weeks).sort((a, b) => Number(a) - Number(b));
   const summary  = weekKeys.map(w => `${w}:${json.weeks[w].length}`).join(' ');
 
-  // Persist to disk as this guild’s active schedule
   const data = { source: 'nfl_2025', weeks: json.weeks };
   SCHEDULES.set(guildId, data);
   await saveSchedule(guildId);
@@ -486,31 +528,32 @@ async function preloadFromBundled2025(guildId) {
   console.log(`📦 Preloaded 2025 → guild=${guildId} weeks=${weekKeys.length} gamesByWeek=${summary}`);
   return { ok: true, msg: `Preloaded ${weekKeys.length} weeks (${summary}).` };
 }
+
 // ---------- Commands ----------
 const commands = [
   {
-  name: 'setup-season',
-  description: 'Choose a season source.',
-  options: [
-    {
-      type: 3,
-      name: 'source',
-      description: 'nfl_2025 (preloaded from local file) or manual',
-      required: true,
-      choices: [
-        { name: 'nfl_2025', value: 'nfl_2025' },
-        { name: 'manual', value: 'manual' }
-      ]
-    },
-    {
-      type: 5,
-      name: 'purge',
-      description: 'Also delete existing Week categories/channels',
-      required: false
-    }
-  ],
-  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
-},
+    name: 'setup-season',
+    description: 'Choose a season source.',
+    options: [
+      {
+        type: 3,
+        name: 'source',
+        description: 'nfl_2025 (preloaded from local file) or manual',
+        required: true,
+        choices: [
+          { name: 'nfl_2025', value: 'nfl_2025' },
+          { name: 'manual', value: 'manual' }
+        ]
+      },
+      {
+        type: 5,
+        name: 'purge',
+        description: 'Also delete existing Week categories/channels',
+        required: false
+      }
+    ],
+    default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+  },
   {
     name: 'import-schedule',
     description: 'Paste CSV lines: week,home,away',
@@ -559,59 +602,74 @@ const commands = [
     default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
   },
   {
-  name: 'bulk-import',
-  description: 'Open a modal to paste many lines: week,home,away',
-},
-  // NEW: Upgrade entrypoint
+    name: 'bulk-import',
+    description: 'Open a modal to paste many lines: week,home,away',
+  },
   {
     name: 'upgrade',
     description: 'Open checkout to unlock Pro features for this server.'
   },
   {
-  name: 'complete',
-  description: 'Mark THIS channel complete (adds ✅ to the channel name).',
-},
-{
-  name: 'uncomplete',
-  description: 'Remove the ✅ from THIS channel name.',
-},
+    name: 'complete',
+    description: 'Mark THIS channel complete (adds ✅ to the channel name).',
+  },
   {
-  name: 'help',
-  description: 'How to use GameDay Channels'
-},
+    name: 'uncomplete',
+    description: 'Remove the ✅ from THIS channel name.',
+  },
   {
-  name: 'team-assign',
-  description: 'Assign a user to a team (they will be pinged on match channels)',
-  options: [
-    { type: 3, name: 'team', description: 'Team name or abbrev', required: true },
-    { type: 6, name: 'user', description: 'User to assign', required: true }
-  ],
-  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
-},
-{
-  name: 'team-unassign',
-  description: 'Remove a user from a team',
-  options: [
-    { type: 3, name: 'team', description: 'Team name or abbrev', required: true },
-    { type: 6, name: 'user', description: 'User to remove', required: true }
-  ],
-  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
-},
-{
-  name: 'team-list',
-  description: 'Show assigned users for a team (or all teams)',
-  options: [
-    { type: 3, name: 'team', description: 'Optional: specific team', required: false }
-  ],
-  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
-},
+    name: 'help',
+    description: 'How to use GameDay Channels'
+  },
+  {
+    name: 'team-assign',
+    description: 'Assign a user to a team (they will be pinged on match channels)',
+    options: [
+      { type: 3, name: 'team', description: 'Team name or abbrev', required: true },
+      { type: 6, name: 'user', description: 'User to assign', required: true }
+    ],
+    default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+  },
+  {
+    name: 'team-unassign',
+    description: 'Remove a user from a team',
+    options: [
+      { type: 3, name: 'team', description: 'Team name or abbrev', required: true },
+      { type: 6, name: 'user', description: 'User to remove', required: true }
+    ],
+    default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+  },
+  {
+    name: 'team-list',
+    description: 'Show assigned users for a team (or all teams)',
+    options: [
+      { type: 3, name: 'team', description: 'Optional: specific team', required: false }
+    ],
+    default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+  },
   { name: 'check-pro', description: 'Check if Pro is active for this server' },
   {
-  name: 'debug-week',
-  description: 'Show how many games the bot sees for a week',
-  options: [{ type: 4, name: 'week', description: 'Week number', required: true }],
-  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
-}
+    name: 'debug-week',
+    description: 'Show how many games the bot sees for a week',
+    options: [{ type: 4, name: 'week', description: 'Week number', required: true }],
+    default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+  },
+  {
+    name: 'set-category-prefix',
+    description: 'Customize week category names (e.g., "NFL Week X").',
+    options: [
+      { type: 3, name: 'prefix', description: 'Prefix for category names (default: "Week")', required: true }
+    ],
+    default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+  },
+  {
+    name: 'ping-fans',
+    description: 'Ping assigned fans for a specific week.',
+    options: [
+      { type: 4, name: 'week', description: 'Week number', required: true }
+    ],
+    default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+  }
 ];
 
 // Prefix we use for completed channels
@@ -622,19 +680,33 @@ function isCompletedName(name) {
 }
 
 function makeCompletedName(name) {
-  // Ensure no spaces (text channels) and avoid double-prefix
   if (isCompletedName(name)) return name;
-  return `${COMPLETE_PREFIX}${name}`.slice(0, 100); // Discord limit safety
+  return `${COMPLETE_PREFIX}${name}`.slice(0, 100);
 }
 
 function makeUncompletedName(name) {
   return name.replace(/^✅-?/, '').slice(0, 100);
 }
 
+async function purgeAllWeekCategories(guild) {
+  let deleted = 0, errors = 0;
+  const categories = guild.channels.cache.filter(c => 
+    c.type === ChannelType.GuildCategory && 
+    c.name.toLowerCase().includes('week ')
+  );
+  for (const [, cat] of categories) {
+    const children = guild.channels.cache.filter(c => c.parentId === cat.id);
+    for (const [, ch] of children) {
+      try { await ch.delete('Purge by /setup-season'); } catch { errors++; }
+    }
+    try { await cat.delete('Purge by /setup-season'); deleted++; } catch { errors++; }
+  }
+  return { deleted, errors };
+}
+
 async function registerCommandsAuto(appId, token, commands, devGuildId, attempt = 1) {
   const rest = new REST({ version: '10' }).setToken(token);
 
-  // helper for nicer logs
   const logErr = (prefix, e) =>
     console.error(`${prefix}:`, e?.status ?? '', e?.code ?? '', e?.message ?? e);
 
@@ -662,7 +734,6 @@ async function registerCommandsAuto(appId, token, commands, devGuildId, attempt 
 
 client.on('guildCreate', async (guild) => {
   try {
-    // Find a channel we can talk in
     const target =
       guild.systemChannel ??
       guild.channels.cache.find(
@@ -682,11 +753,12 @@ client.once('clientReady', async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 
   for (const [guildId] of client.guilds.cache) {
-    // load saved schedule (if any)
-    const loaded = await loadSchedule(guildId).catch(() => null);
+    await loadSchedule(guildId);
+    await loadTeamAssign(guildId);
+    await loadConfig(guildId);
 
+    const loaded = SCHEDULES.get(guildId);
     if (!loaded || !loaded.source) {
-      // default to manual with empty weeks
       SCHEDULES.set(guildId, { source: 'manual', weeks: {} });
       await saveSchedule(guildId);
       console.log(`Initialized ${guildId} → source=manual, weeks=0`);
@@ -696,23 +768,71 @@ client.once('clientReady', async () => {
   }
 
   await registerCommandsAuto(
-  process.env.APP_ID,
-  process.env.DISCORD_TOKEN,
-  commands,
-  process.env.GUILD_ID // leave unset in production
-);
+    process.env.APP_ID,
+    process.env.DISCORD_TOKEN,
+    commands,
+    process.env.GUILD_ID
+  );
 });
 
 // ===================== Interactions =====================
 client.on('interactionCreate', async (interaction) => {
-  // Only handle slash commands and our modal submit
-  if (!interaction.isChatInputCommand() && !interaction.isModalSubmit()) return;
+  if (!interaction.isChatInputCommand() && !interaction.isModalSubmit() && !interaction.isButton()) return;
 
-  // Always load schedule for this guild
   const guildId = interaction.guildId;
   await loadSchedule(guildId);
-  // Always load schedule AND team-assign for this guild
   await loadTeamAssign(guildId);
+  await loadConfig(guildId);
+
+  // ---------- Button Interactions (for /help) ----------
+  if (interaction.isButton()) {
+    if (interaction.customId.startsWith('help-')) {
+      await interaction.deferUpdate();
+      const sub = interaction.customId.replace('help-', '');
+      let embed;
+      switch (sub) {
+        case 'setup':
+          embed = buildInfoEmbed(
+            'Setup Guide',
+            [
+              '• `/setup-season` → choose **nfl_2025** (preloaded) or **manual**',
+              '• `/make-week` → create channels for all games in a week',
+              '• `/add-match` or `/manual-add` → add a game if needed',
+              '• `/set-category-prefix` → customize category names (Pro)'
+            ].join('\n')
+          );
+          break;
+        case 'teams':
+          embed = buildInfoEmbed(
+            'Teams & Tagging',
+            [
+              '• `/team-assign team:<Team> user:@User` → tag fans when weeks are created',
+              '• `/team-unassign` → remove assignment',
+              '• `/team-list` → see assignments',
+              '• `/ping-fans` → remind fans for a week (Pro)'
+            ].join('\n')
+          );
+          break;
+        case 'pro':
+          embed = buildInfoEmbed(
+            'Pro Features',
+            [
+              '💎 Unlock with `/upgrade`:',
+              '• Unlimited weeks beyond free limit',
+              '• Bulk import/export',
+              '• Cleanup tools',
+              '• Customization (e.g., category prefixes)',
+              '• Fan pings & more'
+            ].join('\n')
+          );
+          break;
+        default:
+          return;
+      }
+      await interaction.followUp({ embeds: [embed], flags: MessageFlags.Ephemeral, ephemeral: true });
+      return;
+    }
+  }
 
   // ---------- Slash commands ----------
   if (interaction.isChatInputCommand()) {
@@ -726,11 +846,10 @@ client.on('interactionCreate', async (interaction) => {
       try {
         if (source === 'nfl_2025') {
           const res = await preloadFromBundled2025(guildId);
-          await interaction.editReply({ content: `📅 Source set to **nfl_2025**. ${res.msg}` });
+          await interaction.editReply({ embeds: [buildSuccessEmbed('Season Setup', `📅 Source set to **nfl_2025**. ${res.msg}`)] });
           return;
         }
 
-        // manual → clear all weeks
         const data = SCHEDULES.get(guildId) || { source: null, weeks: {} };
         data.source = 'manual';
         data.weeks  = {};
@@ -742,166 +861,169 @@ client.on('interactionCreate', async (interaction) => {
           const res = await purgeAllWeekCategories(interaction.guild);
           msg += ` 🧹 Deleted **${res.deleted}** week categories (errors: ${res.errors}).`;
         }
-        await interaction.editReply({ content: msg });
+        await interaction.editReply({ embeds: [buildInfoEmbed('Season Setup', msg)] });
       } catch (e) {
-        await interaction.editReply({ content: `❌ Error: ${e?.message || e}` });
+        await interaction.editReply({ embeds: [buildErrorEmbed(`Error: ${e?.message || e}`)] });
       }
       return;
     }
 
     if (interaction.commandName === 'help') {
-  const embed = new EmbedBuilder()
-    .setTitle('📖 GameDay Channels — Quick Guide')
-    .setDescription(
-      [
-        '**Setup**',
-        '• `/setup-season` → choose **nfl_2025** (preloaded) or **manual**',
-        '• `/make-week` → create channels for all games in a week',
-        '• `/add-match` or `/manual-add` → add a game if needed',
-        '',
-        '**Teams & Tagging**',
-        '• `/team-assign team:<Team> user:@User` → tag fans when weeks are created',
-        '• `/team-list` to see assignments',
-        '',
-        '**Finishing Games**',
-        '• `/complete` / `/uncomplete` → mark channels done',
-        '',
-        '**Bulk / Admin (Pro)**',
-        '• `/bulk-import` or `/import-schedule` → paste many games',
-        '• `/cleanup-week` → remove a full week category',
-        '',
-        '💎 `/upgrade` to unlock Pro features.'
-      ].join('\n')
-    );
+      const embed = buildInfoEmbed(
+        '📖 GameDay Channels — Quick Guide',
+        [
+          '**Setup**',
+          '• `/setup-season` → choose **nfl_2025** (preloaded) or **manual**',
+          '• `/make-week` → create channels for all games in a week',
+          '• `/add-match` or `/manual-add` → add a game if needed',
+          '',
+          '**Teams & Tagging**',
+          '• `/team-assign team:<Team> user:@User` → tag fans when weeks are created',
+          '• `/team-list` to see assignments',
+          '',
+          '**Finishing Games**',
+          '• `/complete` / `/uncomplete` → mark channels done',
+          '',
+          '**Bulk / Admin (Pro)**',
+          '• `/bulk-import` or `/import-schedule` → paste many games',
+          '• `/cleanup-week` → remove a full week category',
+          '',
+          '💎 `/upgrade` to unlock Pro features.'
+        ].join('\n')
+      );
 
-  const actions = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setLabel('Upgrade to Pro').setStyle(ButtonStyle.Link).setURL(APP_DIR_URL),
-    new ButtonBuilder().setLabel('Invite the Bot').setStyle(ButtonStyle.Link).setURL(INVITE_URL)
-  );
+      const row1 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('help-setup').setLabel('Setup').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('help-teams').setLabel('Teams').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId('help-pro').setLabel('Pro').setStyle(ButtonStyle.Secondary)
+      );
 
-  await interaction.reply({ embeds: [embed], components: [actions], flags: MessageFlags.Ephemeral });
-  return;
-}
+      const row2 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setLabel('Upgrade to Pro').setStyle(ButtonStyle.Link).setURL(APP_DIR_URL),
+        new ButtonBuilder().setLabel('Invite the Bot').setStyle(ButtonStyle.Link).setURL(INVITE_URL)
+      );
 
-// /team-assign
-if (interaction.commandName === 'team-assign') {
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const teamIn = interaction.options.getString('team', true);
-  const user = interaction.options.getUser('user', true);
-
-  const team = normalizeTeam(teamIn).canonical;
-  const set = getAssignedSet(guildId, team);
-  set.add(user.id);
-  await saveTeamAssign(guildId);
-
-  await interaction.editReply(`✅ Assigned <@${user.id}> to **${team}**.`);
-  return;
-}
-
-// /team-unassign
-if (interaction.commandName === 'team-unassign') {
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  const teamIn = interaction.options.getString('team', true);
-  const user = interaction.options.getUser('user', true);
-
-  const team = normalizeTeam(teamIn).canonical;
-  const set = getAssignedSet(guildId, team);
-  const had = set.delete(user.id);
-  await saveTeamAssign(guildId);
-
-  await interaction.editReply(had
-    ? `🗑️ Removed <@${user.id}> from **${team}**.`
-    : `⚠️ <@${user.id}> was not assigned to **${team}**.`);
-  return;
-}
-
-// /team-list
-if (interaction.commandName === 'team-list') {
-  const teamIn = interaction.options.getString('team');
-  const map = TEAM_ASSIGN.get(guildId) || {};
-
-  if (teamIn) {
-    const team = normalizeTeam(teamIn).canonical;
-    const set = map[team] || new Set();
-    const mentions = Array.from(set).map(id => `<@${id}>`).join(' ') || '_none_';
-    await interaction.reply({ content: `**${team}**: ${mentions}`, flags: MessageFlags.Ephemeral });
-    return;
-  }
-
-  // all teams summary
-  const lines = Object.entries(map).length
-    ? Object.entries(map)
-        .sort(([a],[b]) => a.localeCompare(b))
-        .map(([t, s]) => `• **${t}** (${s.size}): ${Array.from(s).map(id=>`<@${id}>`).join(' ') || '_none_'}`)
-        .join('\n')
-    : '_no assignments_';
-
-  await interaction.reply({ content: `**Team Assignments**\n${lines}`, flags: MessageFlags.Ephemeral });
-  return;
-}
-  // /complete
-if (interaction.commandName === 'complete') {
-  const guildId = interaction.guildId;
-
-  // 🔒 Monetization gate
-  const isPro = await guildHasPro(client, guildId);
-  if (!isPro) {
-    await sendBuyButton(
-      interaction,
-      `🔒 **Pro required** to use /complete. Unlock GameDay Channels Pro to enable this feature.`
-    );
-    return;
-  }
-
-  // --- Proceed if Pro ---
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-  try {
-    const channel = interaction.channel;
-    if (!channel) {
-      await interaction.editReply('⚠️ Could not resolve this channel.');
+      await interaction.reply({ embeds: [embed], components: [row1, row2], flags: MessageFlags.Ephemeral });
       return;
     }
 
-    const newName = channel.name.includes('✅')
-      ? channel.name // already marked
-      : `${channel.name} ✅`;
+    // /team-assign
+    if (interaction.commandName === 'team-assign') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const teamIn = interaction.options.getString('team', true);
+      const user = interaction.options.getUser('user', true);
 
-    await channel.setName(newName, 'Marked complete by /complete');
-    await interaction.editReply(`✅ Channel marked complete: **${newName}**`);
-  } catch (e) {
-    console.error('Error in /complete:', e);
-    await interaction.editReply('❌ Failed to mark channel complete.');
-  }
-  return;
-}
+      const team = normalizeTeam(teamIn).canonical;
+      const set = getAssignedSet(guildId, team);
+      set.add(user.id);
+      await saveTeamAssign(guildId);
 
-// /uncomplete — Pro-only
-if (interaction.commandName === 'uncomplete') {
-  if (!(await requireProGuild(interaction, 'Uncomplete Channel'))) return;
+      await interaction.editReply({ embeds: [buildSuccessEmbed('Team Assignment', `✅ Assigned <@${user.id}> to **${team}**.`)] });
+      return;
+    }
 
-  const ch = interaction.channel;
-  if (!ch || !interaction.guild) {
-    await interaction.reply({ content: 'Use this inside a server channel.', flags: MessageFlags.Ephemeral });
-    return;
-  }
+    // /team-unassign
+    if (interaction.commandName === 'team-unassign') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const teamIn = interaction.options.getString('team', true);
+      const user = interaction.options.getUser('user', true);
 
-  const canManage = interaction.guild.members.me?.permissionsIn(ch)?.has(PermissionFlagsBits.ManageChannels);
-  if (!canManage) {
-    await interaction.reply({ content: 'I need **Manage Channels** in this channel to rename it.', flags: MessageFlags.Ephemeral });
-    return;
-  }
+      const team = normalizeTeam(teamIn).canonical;
+      const set = getAssignedSet(guildId, team);
+      const had = set.delete(user.id);
+      await saveTeamAssign(guildId);
 
-  const oldName = ch.name;
-  if (!isCompletedName(oldName)) {
-    await interaction.reply({ content: `No ✅ to remove on **#${oldName}**.`, flags: MessageFlags.Ephemeral });
-    return;
-  }
+      const msg = had
+        ? `🗑️ Removed <@${user.id}> from **${team}**.`
+        : `⚠️ <@${user.id}> was not assigned to **${team}**.`;
+      await interaction.editReply({ embeds: [buildInfoEmbed('Team Unassignment', msg)] });
+      return;
+    }
 
-  const newName = makeUncompletedName(oldName);
-  await ch.setName(newName, 'Unmarked by /uncomplete').catch(()=>{});
-  await interaction.reply({ content: `🧹 Unmarked → **#${newName}**`, flags: MessageFlags.Ephemeral });
-  return;
-}
+    // /team-list
+    if (interaction.commandName === 'team-list') {
+      const teamIn = interaction.options.getString('team');
+      const map = TEAM_ASSIGN.get(guildId) || {};
+
+      if (teamIn) {
+        const team = normalizeTeam(teamIn).canonical;
+        const set = map[team] || new Set();
+        const mentions = Array.from(set).map(id => `<@${id}>`).join(' ') || '_none_';
+        await interaction.reply({ embeds: [buildInfoEmbed(`Team: ${team}`, mentions)], flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const lines = Object.entries(map).length
+        ? Object.entries(map)
+            .sort(([a],[b]) => a.localeCompare(b))
+            .map(([t, s]) => `• **${t}** (${s.size}): ${Array.from(s).map(id=>`<@${id}>`).join(' ') || '_none_'}`)
+            .join('\n')
+        : '_no assignments_';
+
+      await interaction.reply({ embeds: [buildInfoEmbed('Team Assignments', lines)], flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    // /complete
+    if (interaction.commandName === 'complete') {
+      const isPro = await guildHasPro(client, guildId);
+      if (!isPro) {
+        await sendBuyButton(
+          interaction,
+          `🔒 **Pro required** to use /complete. Unlock GameDay Channels Pro to enable this feature.`
+        );
+        return;
+      }
+
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      try {
+        const channel = interaction.channel;
+        if (!channel) {
+          await interaction.editReply({ embeds: [buildErrorEmbed('⚠️ Could not resolve this channel.')] });
+          return;
+        }
+
+        const newName = channel.name.includes('✅')
+          ? channel.name
+          : `${channel.name} ✅`;
+
+        await channel.setName(newName, 'Marked complete by /complete');
+        await interaction.editReply({ embeds: [buildSuccessEmbed('Channel Complete', `✅ Channel marked complete: **${newName}**`)] });
+      } catch (e) {
+        console.error('Error in /complete:', e);
+        await interaction.editReply({ embeds: [buildErrorEmbed('❌ Failed to mark channel complete.')] });
+      }
+      return;
+    }
+
+    // /uncomplete
+    if (interaction.commandName === 'uncomplete') {
+      if (!(await requireProGuild(interaction, 'Uncomplete Channel'))) return;
+
+      const ch = interaction.channel;
+      if (!ch || !interaction.guild) {
+        await interaction.reply({ embeds: [buildErrorEmbed('Use this inside a server channel.')], flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const canManage = interaction.guild.members.me?.permissionsIn(ch)?.has(PermissionFlagsBits.ManageChannels);
+      if (!canManage) {
+        await interaction.reply({ embeds: [buildErrorEmbed('I need **Manage Channels** in this channel to rename it.')], flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const oldName = ch.name;
+      if (!isCompletedName(oldName)) {
+        await interaction.reply({ embeds: [buildErrorEmbed(`No ✅ to remove on **#${oldName}**.`)], flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const newName = makeUncompletedName(oldName);
+      await ch.setName(newName, 'Unmarked by /uncomplete').catch(()=>{});
+      await interaction.reply({ embeds: [buildSuccessEmbed('Channel Uncomplete', `🧹 Unmarked → **#${newName}**`)], flags: MessageFlags.Ephemeral });
+      return;
+    }
+
     // /import-schedule
     if (interaction.commandName === 'import-schedule') {
       if (!(await requireProGuild(interaction, 'Schedule Import'))) return;
@@ -915,7 +1037,7 @@ if (interaction.commandName === 'uncomplete') {
       for (const line of lines) {
         const parts = line.split(',').map(s => s.trim());
         if (parts.length < 3) { bad++; continue; }
-        const wk = String(Number(parts[0]));                 // normalize to "1"
+        const wk = String(Number(parts[0]));
         if (!wk || wk === 'NaN') { bad++; continue; }
 
         const { canonical: home } = normalizeTeam(parts[1]);
@@ -930,7 +1052,7 @@ if (interaction.commandName === 'uncomplete') {
 
       SCHEDULES.set(guildId, data);
       await saveSchedule(guildId);
-      await interaction.editReply(`✅ Imported. Added ${added} match(es). Skipped ${bad} malformed line(s).`);
+      await interaction.editReply({ embeds: [buildSuccessEmbed('Import Complete', `✅ Imported. Added ${added} match(es). Skipped ${bad} malformed line(s).`)] });
       return;
     }
 
@@ -948,7 +1070,6 @@ if (interaction.commandName === 'uncomplete') {
         return;
       }
 
-      
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await makeWeek(interaction, week, role);
       return;
@@ -957,13 +1078,13 @@ if (interaction.commandName === 'uncomplete') {
     if (interaction.commandName === 'check-pro') {
       const isPro = await guildHasPro(client, interaction.guildId);
       await interaction.reply({
-         content: isPro ? '✅ Pro is active for this server!' : '❌ No Pro subscription found.',
-         flags: MessageFlags.Ephemeral
+        embeds: [buildInfoEmbed('Pro Status', isPro ? '✅ Pro is active for this server!' : '❌ No Pro subscription found.')],
+        flags: MessageFlags.Ephemeral
       });
       return;
     }
-    
-    // /add-match (adds & builds)
+
+    // /add-match
     if (interaction.commandName === 'add-match') {
       const week = interaction.options.getInteger('week', true);
       const home = interaction.options.getString('home', true);
@@ -977,7 +1098,7 @@ if (interaction.commandName === 'uncomplete') {
       return;
     }
 
-    // /manual-add → open modal (no trailing commas!)
+    // /manual-add
     if (interaction.commandName === 'manual-add') {
       const modal = new ModalBuilder()
         .setCustomId('manualAddModal')
@@ -1019,17 +1140,20 @@ if (interaction.commandName === 'uncomplete') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       if (!confirm) {
-        await interaction.editReply('❌ Deletion not confirmed.');
+        await interaction.editReply({ embeds: [buildErrorEmbed('❌ Deletion not confirmed.')] });
         return;
       }
 
+      const config = await loadConfig(guildId);
+      const prefix = config.categoryPrefix || 'Week';
+      const catName = `${prefix} ${week}`;
       const cat = interaction.guild.channels.cache.find(
         c => c.type === ChannelType.GuildCategory &&
-             c.name.toLowerCase() === `week ${week}`.toLowerCase()
+             c.name.toLowerCase() === catName.toLowerCase()
       );
 
       if (!cat) {
-        await interaction.editReply('⚠️ No category found for that week.');
+        await interaction.editReply({ embeds: [buildErrorEmbed('⚠️ No category found for that week.')] });
         return;
       }
 
@@ -1038,28 +1162,28 @@ if (interaction.commandName === 'uncomplete') {
         try { await ch.delete('Cleanup by /cleanup-week'); } catch {}
       }
       try { await cat.delete('Cleanup by /cleanup-week'); } catch {}
-      await interaction.editReply(`🗑️ Deleted Week ${week}.`);
+      await interaction.editReply({ embeds: [buildSuccessEmbed('Cleanup Complete', `🗑️ Deleted ${catName}.`)] });
       return;
     }
 
     // /bulk-import
     if (interaction.commandName === 'bulk-import') {
-    if (!(await requireProGuild(interaction, 'Bulk Import'))) return;
+      if (!(await requireProGuild(interaction, 'Bulk Import'))) return;
 
-    const modal = new ModalBuilder()
-      .setCustomId('bulkImportModal')
-      .setTitle('Bulk Import: week,home,away');
+      const modal = new ModalBuilder()
+        .setCustomId('bulkImportModal')
+        .setTitle('Bulk Import: week,home,away');
 
-    const textarea = new TextInputBuilder()
-      .setCustomId('bulkText')
-      .setLabel('Paste lines (CSV): week,home,away')
-      .setStyle(TextInputStyle.Paragraph)
-      .setRequired(true);
+      const textarea = new TextInputBuilder()
+        .setCustomId('bulkText')
+        .setLabel('Paste lines (CSV): week,home,away')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true);
 
-    modal.addComponents(new ActionRowBuilder().addComponents(textarea));
-    await interaction.showModal(modal);
-    return;
-}
+      modal.addComponents(new ActionRowBuilder().addComponents(textarea));
+      await interaction.showModal(modal);
+      return;
+    }
 
     // /upgrade
     if (interaction.commandName === 'upgrade') {
@@ -1072,76 +1196,134 @@ if (interaction.commandName === 'uncomplete') {
       const wk    = String(Number(interaction.options.getInteger('week', true)));
       const data  = SCHEDULES.get(guildId) || { weeks: {} };
       const games = data.weeks?.[wk] || [];
-      await interaction.reply({
-        content:
-          `Guild: \`${guildId}\`\n` +
-          `Weeks present: [${Object.keys(data.weeks || {}).join(', ')}]\n` +
-          `Week ${wk}: I see **${games.length}** game(s).\n` +
-          (games.slice(0, 10).map(g => `• ${g.home} vs ${g.away}`).join('\n') || ''),
-        flags: MessageFlags.Ephemeral
-      });
+      const desc =
+        `Guild: \`${guildId}\`\n` +
+        `Weeks present: [${Object.keys(data.weeks || {}).join(', ')}]\n` +
+        `Week ${wk}: I see **${games.length}** game(s).\n` +
+        (games.slice(0, 10).map(g => `• ${g.home} vs ${g.away}`).join('\n') || '');
+      await interaction.reply({ embeds: [buildInfoEmbed('Debug Week', desc)], flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    // /set-category-prefix
+    if (interaction.commandName === 'set-category-prefix') {
+      if (!(await requireProGuild(interaction, 'Set Category Prefix'))) return;
+
+      const prefix = interaction.options.getString('prefix', true).trim() || 'Week';
+      const config = await loadConfig(guildId);
+      config.categoryPrefix = prefix;
+      CONFIGS.set(guildId, config);
+      await saveConfig(guildId);
+
+      await interaction.reply({ embeds: [buildSuccessEmbed('Category Prefix Updated', `✅ Categories will now use prefix: **${prefix}** (e.g., "${prefix} 1")`)] });
+      return;
+    }
+
+    // /ping-fans
+    if (interaction.commandName === 'ping-fans') {
+      if (!(await requireProGuild(interaction, 'Ping Fans'))) return;
+
+      const week = interaction.options.getInteger('week', true);
+      const data = SCHEDULES.get(guildId) || { weeks: {} };
+      const games = data.weeks[week] || [];
+      if (!games.length) {
+        await interaction.reply({ embeds: [buildErrorEmbed(`⚠️ No games in Week ${week}.`)] });
+        return;
+      }
+
+      // Collect unique users
+      const assignMap = TEAM_ASSIGN.get(guildId) || {};
+      const allUsers = new Set();
+      for (const { home, away } of games) {
+        const homeSet = assignMap[home] || new Set();
+        const awaySet = assignMap[away] || new Set();
+        [...homeSet, ...awaySet].forEach(id => allUsers.add(id));
+      }
+
+      if (allUsers.size === 0) {
+        await interaction.reply({ embeds: [buildErrorEmbed('No fans assigned to teams in this week.')], flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      // Find summary channel: first channel in week category
+      const config = await loadConfig(guildId);
+      const prefix = config.categoryPrefix || 'Week';
+      const catName = `${prefix} ${week}`;
+      const cat = interaction.guild.channels.cache.find(
+        c => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === catName.toLowerCase()
+      );
+      const summaryChannel = cat ? interaction.guild.channels.cache.find(c => c.parentId === cat.id && c.type === ChannelType.GuildText) : null;
+
+      if (!summaryChannel) {
+        await interaction.reply({ embeds: [buildErrorEmbed('Week category not found. Create it with /make-week first.')], flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const mentions = Array.from(allUsers).map(id => `<@${id}>`).join(' ');
+      const message = `🏈 **Game Day Hype for Week ${week}!** ${mentions} – Get ready for kickoff!`;
+
+      try {
+        await summaryChannel.send(message);
+        await interaction.reply({ embeds: [buildSuccessEmbed('Fans Pinged', `✅ Pinged ${allUsers.size} fans in #${summaryChannel.name}`)] });
+      } catch (e) {
+        await interaction.reply({ embeds: [buildErrorEmbed('Failed to send ping message. Check permissions.')], flags: MessageFlags.Ephemeral });
+      }
       return;
     }
   }
 
   // ---------- Modal submit ----------
-if (interaction.isModalSubmit() && interaction.customId === 'bulkImportModal') {
-  if (!(await requireProGuild(interaction, 'Bulk Import'))) return;
+  if (interaction.isModalSubmit() && interaction.customId === 'bulkImportModal') {
+    if (!(await requireProGuild(interaction, 'Bulk Import'))) return;
 
-  const guildId = interaction.guildId;
-  await loadSchedule(guildId);
+    const raw = interaction.fields.getTextInputValue('bulkText') || '';
+    const lines = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
 
-  const raw = interaction.fields.getTextInputValue('bulkText') || '';
-  const lines = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    const data = SCHEDULES.get(guildId) || { source: null, weeks: {} };
+    let added = 0, bad = 0;
 
-  const data = SCHEDULES.get(guildId) || { source: null, weeks: {} };
-  let added = 0, bad = 0;
+    for (const line of lines) {
+      if (line.startsWith('#')) continue;
+      const parts = line.split(',').map(s => s.trim());
+      if (parts.length < 3) { bad++; continue; }
 
-  for (const line of lines) {
-    if (line.startsWith('#')) continue;
-    const parts = line.split(',').map(s => s.trim());
-    if (parts.length < 3) { bad++; continue; }
+      const wk = String(Number(parts[0]));
+      if (!wk || wk === 'NaN') { bad++; continue; }
 
-    const wk = String(Number(parts[0]));
-    if (!wk || wk === 'NaN') { bad++; continue; }
+      const { canonical: home } = normalizeTeam(parts[1]);
+      const { canonical: away } = normalizeTeam(parts[2]);
 
-    const { canonical: home } = normalizeTeam(parts[1]);
-    const { canonical: away } = normalizeTeam(parts[2]);
+      data.weeks[wk] = data.weeks[wk] || [];
+      const dup = data.weeks[wk].some(m => m.home === home && m.away === away);
+      if (!dup) { data.weeks[wk].push({ home, away }); added++; }
+    }
 
-    data.weeks[wk] = data.weeks[wk] || [];
-    const dup = data.weeks[wk].some(m => m.home === home && m.away === away);
-    if (!dup) { data.weeks[wk].push({ home, away }); added++; }
+    SCHEDULES.set(guildId, data);
+    await saveSchedule(guildId);
+
+    const touched = Object.entries(data.weeks)
+      .filter(([_, arr]) => (arr?.length ?? 0) > 0)
+      .map(([w, arr]) => `${w}:${arr.length}`).join(' ');
+
+    const desc = `✅ Bulk import complete.\n• Added: **${added}**   • Skipped (bad/dup): **${bad}**\n${touched ? `Weeks now: ${touched}` : ''}`;
+    await interaction.reply({ embeds: [buildSuccessEmbed('Bulk Import', desc)], flags: MessageFlags.Ephemeral });
+    return;
   }
 
-  SCHEDULES.set(guildId, data);
-  await saveSchedule(guildId);
-
-  const touched = Object.entries(data.weeks)
-    .filter(([_, arr]) => (arr?.length ?? 0) > 0)
-    .map(([w, arr]) => `${w}:${arr.length}`).join(' ');
-
-  await interaction.reply({
-    content: `✅ Bulk import complete.\n• Added: **${added}**   • Skipped (bad/dup): **${bad}**\n${touched ? `Weeks now: ${touched}` : ''}`,
-    flags: MessageFlags.Ephemeral
-  });
-  return;
-}
-  
   if (interaction.isModalSubmit() && interaction.customId === 'manualAddModal') {
     const wk   = String(Number(interaction.fields.getTextInputValue('week')));
     const away = interaction.fields.getTextInputValue('away');
     const home = interaction.fields.getTextInputValue('home');
 
     if (!wk || wk === 'NaN') {
-      await interaction.reply({ content: 'Week must be a positive number.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ embeds: [buildErrorEmbed('Week must be a positive number.')], flags: MessageFlags.Ephemeral });
       return;
     }
 
     addMatch(guildId, wk, home, away);
     await saveSchedule(guildId);
     await interaction.reply({
-      content: `✅ Added to Week ${wk}: ${titleCase(away)} @ ${titleCase(home)}. Use /make-week to build channels.`,
-      flags: MessageFlags.Ephemeral
+      embeds: [buildSuccessEmbed('Match Added', `✅ Added to Week ${wk}: ${titleCase(away)} @ ${titleCase(home)}. Use /make-week to build channels.`)]
     });
     return;
   }

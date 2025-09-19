@@ -663,6 +663,28 @@ const commands = [
     default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
   },
   {
+  name: 'team-clear',
+  description: 'Remove all users assigned to a team',
+  options: [{ type: 3, name: 'team', description: 'Team name or abbrev', required: true }],
+  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+},
+{
+  name: 'fair-sim',
+  description: 'Mark THIS game as a fair sim (⚠️fs)',
+  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+},
+{
+  name: 'force-win',
+  description: 'Mark a force win for home or away (✅/❌)',
+  options: [
+    { type: 3, name: 'side', description: 'home or away', required: true, choices: [
+      { name: 'home', value: 'home' },
+      { name: 'away', value: 'away' },
+    ] }
+  ],
+  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+},
+  {
     name: 'ping-coaches',
     description: 'Ping assigned coaches for a specific week.',
     options: [
@@ -686,6 +708,56 @@ function makeCompletedName(name) {
 
 function makeUncompletedName(name) {
   return name.replace(/^✅-?/, '').slice(0, 100);
+}
+
+// ---- Match-channel name helpers ----
+// Expected base pattern you create: "<home>-vs-<away>" (lowercase, hyphenated)
+// We’ll tolerate existing emojis/tags and re-normalize.
+
+const VS_TOKEN = '-vs-';
+const TAG_FS   = '⚠️fs';
+const EMOJI_WIN = '✅';
+const EMOJI_LOSE = '❌';
+
+// Strip known tags/emojis so we can rebuild cleanly
+function stripMatchTags(name) {
+  let n = name.toLowerCase();
+
+  // remove fair-sim tag if present (at end or start)
+  n = n.replace(/-⚠️fs\b/g, '').replace(/\b⚠️fs-?/g, '');
+
+  // remove any leading/trailing check/x on sides like "✅-eagles" or "eagles❌"
+  n = n.replace(/(^|-)✅-/g, '$1'); // leading ✅-
+  n = n.replace(/(^|-)❌-/g, '$1'); // leading ❌-
+  n = n.replace(/✅(?=-|$)/g, '');  // trailing ✅
+  n = n.replace(/❌(?=-|$)/g, '');  // trailing ❌
+
+  // compress duplicate hyphens
+  n = n.replace(/--+/g, '-').replace(/^-|-$/g, '');
+  return n;
+}
+
+function parseHomeAwayFromChannel(name) {
+  const stripped = stripMatchTags(name);
+  const idx = stripped.indexOf(VS_TOKEN);
+  if (idx === -1) return { home: null, away: null, raw: stripped };
+
+  const home = stripped.slice(0, idx);
+  const away = stripped.slice(idx + VS_TOKEN.length);
+  return { home, away, raw: stripped };
+}
+
+// Safe rejoin: <home>-vs-<away> plus optional end tags
+function buildMatchName({ home, away, fairSim = false, homeBadge = '', awayBadge = '' }) {
+  // Attach winner/loser emoji adjacent to team tokens (no spaces)
+  const h = [homeBadge, home].filter(Boolean).join(''); // e.g., "✅falcons"
+  const a = [awayBadge, away].filter(Boolean).join(''); // e.g., "❌eagles"
+
+  let base = `${h}${VS_TOKEN}${a}`;
+  if (fairSim) base = `${base}-⚠️fs`;
+
+  // Discord 100-char safety
+  return base.slice(0, 100);
 }
 
 async function purgeAllWeekCategories(guild) {
@@ -906,6 +978,8 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.reply({ embeds: [embed], components: [row1, row2], flags: MessageFlags.Ephemeral });
       return;
     }
+
+  
 
     // /team-assign
     if (interaction.commandName === 'team-assign') {
@@ -1131,6 +1205,92 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.showModal(modal);
       return;
     }
+
+    if (interaction.commandName === 'team-clear') {
+  if (!(await requireProGuild(interaction, 'Team Clear'))) return;
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const teamIn = interaction.options.getString('team', true);
+  const team = normalizeTeam(teamIn).canonical;
+
+  const map = TEAM_ASSIGN.get(guildId) || {};
+  if (!map[team] || !(map[team] instanceof Set) || map[team].size === 0) {
+    await interaction.editReply(`ℹ️ **${team}** has no assigned users.`);
+    return;
+  }
+
+  map[team].clear();
+  TEAM_ASSIGN.set(guildId, map);
+  await saveTeamAssign(guildId);
+
+  await interaction.editReply(`🧹 Cleared all assignments for **${team}**.`);
+  return;
+}
+
+    if (interaction.commandName === 'fair-sim') {
+  if (!(await requireProGuild(interaction, 'Fair Sim'))) return;
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const ch = interaction.channel;
+  if (!ch || ch.type !== ChannelType.GuildText) {
+    await interaction.editReply('⚠️ Use this in a text channel.');
+    return;
+  }
+
+  // Parse & rebuild with the FS tag; keep any previous FW emojis off
+  const { home, away } = parseHomeAwayFromChannel(ch.name);
+  if (!home || !away) {
+    await interaction.editReply('❌ Could not detect a match name pattern (`<home>-vs-<away>`).');
+    return;
+  }
+
+  const newName = buildMatchName({ home, away, fairSim: true, homeBadge: '', awayBadge: '' });
+  try {
+    await ch.setName(newName, 'Marked fair sim');
+    await interaction.editReply(`⚠️ Marked as fair sim → **#${newName}**`);
+  } catch {
+    await interaction.editReply('❌ Failed to rename channel.');
+  }
+  return;
+}
+
+    if (interaction.commandName === 'force-win') {
+  if (!(await requireProGuild(interaction, 'Force Win'))) return;
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const side = interaction.options.getString('side', true); // 'home' | 'away'
+  const ch = interaction.channel;
+  if (!ch || ch.type !== ChannelType.GuildText) {
+    await interaction.editReply('⚠️ Use this in a text channel.');
+    return;
+  }
+
+  // Detect if fair-sim is already on the channel
+  const hadFs = /-⚠️fs\b/.test(ch.name);
+
+  const { home, away } = parseHomeAwayFromChannel(ch.name);
+  if (!home || !away) {
+    await interaction.editReply('❌ Could not detect a match name pattern (`<home>-vs-<away>`).');
+    return;
+  }
+
+  let homeBadge = '', awayBadge = '';
+  if (side === 'home') { homeBadge = EMOJI_WIN; awayBadge = EMOJI_LOSE; }
+  else { homeBadge = EMOJI_LOSE; awayBadge = EMOJI_WIN; }
+
+  const newName = buildMatchName({ home, away, fairSim: hadFs, homeBadge, awayBadge });
+  try {
+    await ch.setName(newName, `Force win: ${side}`);
+    await interaction.editReply(
+      `${side === 'home' ? '🏠' : '🛫'} Force win set → **#${newName}** (winner ${side})`
+    );
+  } catch {
+    await interaction.editReply('❌ Failed to rename channel.');
+  }
+  return;
+}
+
+    
 
     // /cleanup-week
     if (interaction.commandName === 'cleanup-week') {

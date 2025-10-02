@@ -640,6 +640,19 @@ const commands = [
     default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
   },
   {
+  name: 'teams-clear-all',
+  description: 'Remove all users from ALL teams (bulk reset)',
+  options: [
+    {
+      type: 5,
+      name: 'confirm',
+      description: 'Type true to confirm this bulk reset',
+      required: true
+    }
+  ],
+  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+},
+  {
     name: 'team-list',
     description: 'Show assigned users for a team (or all teams)',
     options: [
@@ -1014,6 +1027,41 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
+    // /teams-clear-all
+if (interaction.commandName === 'teams-clear-all') {
+  if (!(await requireProGuild(interaction, 'Bulk Team Clear'))) return;
+
+  const confirm = interaction.options.getBoolean('confirm', true);
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  if (!confirm) {
+    await interaction.editReply({ embeds: [buildErrorEmbed('❌ Bulk clear not confirmed.')] });
+    return;
+  }
+
+  const map = TEAM_ASSIGN.get(guildId) || {};
+  let teamsTouched = 0;
+  let usersCleared = 0;
+
+  // Clear all sets in-place so we keep your JSON shape consistent
+  for (const [team, set] of Object.entries(map)) {
+    if (set instanceof Set && set.size > 0) {
+      usersCleared += set.size;
+      set.clear();
+      teamsTouched++;
+    }
+  }
+
+  TEAM_ASSIGN.set(guildId, map);
+  await saveTeamAssign(guildId);
+
+  const msg = teamsTouched === 0
+    ? 'ℹ️ No teams had assigned users.'
+    : `🧹 Cleared **${usersCleared}** user assignment(s) across **${teamsTouched}** team(s).`;
+
+  await interaction.editReply({ embeds: [buildSuccessEmbed('Teams Cleared', msg)] });
+  return;
+}
     // /team-list
     if (interaction.commandName === 'team-list') {
       const teamIn = interaction.options.getString('team');

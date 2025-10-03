@@ -969,7 +969,7 @@ client.on('interactionCreate', async (interaction) => {
               '• `/team-assign team:<Team> user:@User` → tag coaches when weeks are created',
               '• `/team-unassign` → remove assignment',
               '• `/team-list` → see assignments',
-              '• `/ping-coaches` → remind coaches for a week (Pro)'
+              '• `/ches` → remind coaches for a week (Pro)'
             ].join('\n')
           );
           break;
@@ -1543,58 +1543,78 @@ if (interaction.commandName === 'team-reloc-clear') {
       return;
     }
 
-    // /ping-coaches
-    if (interaction.commandName === 'ping-coaches') {
-      if (!(await requireProGuild(interaction, 'Ping coaches'))) return;
+   // /ping-coaches
+if (interaction.commandName === 'ping-coaches') {
+  if (!(await requireProGuild(interaction, 'Ping coaches'))) return;
 
-      const week = interaction.options.getInteger('week', true);
-      const data = SCHEDULES.get(guildId) || { weeks: {} };
-      const games = data.weeks[week] || [];
-      if (!games.length) {
-        await interaction.reply({ embeds: [buildErrorEmbed(`⚠️ No games in Week ${week}.`)] });
-        return;
-      }
+  const week = interaction.options.getInteger('week', true);
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-      // Collect unique users
-      const assignMap = TEAM_ASSIGN.get(guildId) || {};
-      const allUsers = new Set();
-      for (const { home, away } of games) {
-        const homeSet = assignMap[home] || new Set();
-        const awaySet = assignMap[away] || new Set();
-        [...homeSet, ...awaySet].forEach(id => allUsers.add(id));
-      }
+  const data = SCHEDULES.get(guildId) || { weeks: {} };
+  const games = data.weeks[week] || [];
+  if (!games.length) {
+    await interaction.editReply({ embeds: [buildErrorEmbed(`⚠️ No games in Week ${week}.`)] });
+    return;
+  }
 
-      if (allUsers.size === 0) {
-        await interaction.reply({ embeds: [buildErrorEmbed('No coaches assigned to teams in this week.')], flags: MessageFlags.Ephemeral });
-        return;
-      }
+  const assignMap = TEAM_ASSIGN.get(guildId) || {};
 
-      // Find summary channel: first channel in week category
-      const config = await loadConfig(guildId);
-      const prefix = config.categoryPrefix || 'Week';
-      const catName = `${prefix} ${week}`;
-      const cat = interaction.guild.channels.cache.find(
-        c => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === catName.toLowerCase()
-      );
-      const summaryChannel = cat ? interaction.guild.channels.cache.find(c => c.parentId === cat.id && c.type === ChannelType.GuildText) : null;
+  // Find the Week category
+  const config = await loadConfig(guildId);
+  const prefix = config.categoryPrefix || 'Week';
+  const catName = `${prefix} ${week}`;
+  const cat = interaction.guild.channels.cache.find(
+    c => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === catName.toLowerCase()
+  );
+  if (!cat) {
+    await interaction.editReply({ embeds: [buildErrorEmbed('Week category not found. Create it with /make-week first.')] });
+    return;
+  }
 
-      if (!summaryChannel) {
-        await interaction.reply({ embeds: [buildErrorEmbed('Week category not found. Create it with /make-week first.')], flags: MessageFlags.Ephemeral });
-        return;
-      }
+  let sent = 0, missing = 0, renamed = 0, noCoaches = 0, errors = 0;
 
-      const mentions = Array.from(allUsers).map(id => `<@${id}>`).join(' ');
-      const message = `🏈 **Game Day Hype for Week ${week}!** ${mentions} – Get ready for kickoff!`;
+  for (const { home, away } of games) {
+    const expected = safeChannelName(`${home}-vs-${away}`);
 
-      try {
-        await summaryChannel.send(message);
-        await interaction.reply({ embeds: [buildSuccessEmbed('Coaches Pinged', `✅ Pinged ${allUsers.size} coaches in #${summaryChannel.name}`)] });
-      } catch (e) {
-        await interaction.reply({ embeds: [buildErrorEmbed('Failed to send ping message. Check permissions.')], flags: MessageFlags.Ephemeral });
-      }
-      return;
+    // Find the exact, unmodified game channel under the category
+    const ch = interaction.guild.channels.cache.find(
+      c => c.parentId === cat.id &&
+           c.type === ChannelType.GuildText &&
+           c.name === expected
+    );
+
+    if (!ch) { missing++; continue; }
+
+    // If the channel's name isn't exactly the expected base, consider it "changed" and skip
+    // (This also naturally skips completed names, FS tags, and force-win emoji variants)
+    if (ch.name !== expected) { renamed++; continue; }
+
+    // Collect assigned coaches
+    const homeIds = Array.from(assignMap[home] || []);
+    const awayIds = Array.from(assignMap[away] || []);
+    const mentions = [...new Set([...homeIds, ...awayIds])];
+
+    if (!mentions.length) { noCoaches++; continue; }
+
+    const content =
+      `🏈 **${home} vs ${away}**\n` +
+      (homeIds.length ? `Home coaches: ${homeIds.map(id=>`<@${id}>`).join(' ')}\n` : '') +
+      (awayIds.length ? `Away coaches: ${awayIds.map(id=>`<@${id}>`).join(' ')}` : '');
+
+    try {
+      await ch.send({ content, allowedMentions: { parse: [], users: mentions } });
+      sent++;
+    } catch {
+      errors++;
     }
   }
+
+  const summary =
+    `Week ${week} — ✅ sent: **${sent}** • ⚠️ missing: **${missing}** • ✏️ renamed/modified: **${renamed}** • 🚫 no-coaches: **${noCoaches}** • ❌ errors: **${errors}**`;
+
+  await interaction.editReply({ embeds: [buildSuccessEmbed('Ping Coaches', summary)] });
+  return;
+}
 
   // /team-relocate
 if (interaction.commandName === 'team-relocate') {

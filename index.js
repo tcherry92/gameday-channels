@@ -387,12 +387,74 @@ async function saveTeamAssign(guildId) {
   await fs.writeJSON(TEAM_ASSIGN_FILE(guildId), json, { spaces: 2 }).catch(()=>{});
 }
 
-function getAssignedSet(guildId, team) {
+function getAssignedSet(guildId, teamInput) {
   const map = TEAM_ASSIGN.get(guildId) || {};
-  const t = normalizeTeam(team).canonical;
+  const t = canonicalTeamForGuild(guildId, teamInput);
   map[t] = map[t] || new Set();
   TEAM_ASSIGN.set(guildId, map);
   return map[t];
+}
+
+// ---------- Team relocations (persistent renames) ----------
+const TEAM_RELOC_FILE = guildId => path.join(DATA_DIR, `team-relocations-${guildId}.json`);
+const TEAM_RELOC = new Map(); // guildId -> { [fromCanonical]: toCanonical }
+
+async function loadTeamReloc(guildId) {
+  const fp = TEAM_RELOC_FILE(guildId);
+  if (await fs.pathExists(fp)) {
+    const raw = await fs.readJSON(fp).catch(()=>null);
+    if (raw && typeof raw === 'object') {
+      TEAM_RELOC.set(guildId, raw);
+      return raw;
+    }
+  }
+  const fresh = {};
+  TEAM_RELOC.set(guildId, fresh);
+  return fresh;
+}
+async function saveTeamReloc(guildId) {
+  const json = TEAM_RELOC.get(guildId) || {};
+  await fs.writeJSON(TEAM_RELOC_FILE(guildId), json, { spaces: 2 }).catch(()=>{});
+}
+
+/**
+ * Resolve a canonical team name through relocation map, with cycle safety + chain compression.
+ * Example: Falcons -> Lumberjacks -> Wolves  ==> returns Wolves and compresses Falcons->Wolves.
+ */
+function applyRelocation(guildId, team) {
+  const reloc = TEAM_RELOC.get(guildId) || {};
+  let cur = team;
+  const seen = new Set();
+  while (reloc[cur] && !seen.has(cur)) {
+    seen.add(cur);
+    cur = reloc[cur];
+  }
+  // Compress path (optional: makes future lookups O(1))
+  for (const s of seen) reloc[s] = cur;
+  TEAM_RELOC.set(guildId, reloc);
+  return cur;
+}
+
+/** Normalize input to canonical, then apply relocation for THIS guild */
+function canonicalTeamForGuild(guildId, input) {
+  const { canonical } = normalizeTeam(input);
+  return applyRelocation(guildId, canonical);
+}
+
+/** Rewire relocations pointing to `fromTeam` so they now point to `toTeam` (chain compression helper). */
+function rebaseRelocations(guildId, fromTeam, toTeam) {
+  const reloc = TEAM_RELOC.get(guildId) || {};
+  for (const [k, v] of Object.entries(reloc)) {
+    if (v === fromTeam) reloc[k] = toTeam;
+  }
+  TEAM_RELOC.set(guildId, reloc);
+}
+
+/** Prevent cycles like A->B and B->A */
+function wouldCreateCycle(guildId, fromTeam, toTeam) {
+  if (fromTeam === toTeam) return true;
+  const resolvedTo = applyRelocation(guildId, toTeam);
+  return resolvedTo === fromTeam;
 }
 
 // ---------- Schedule storage ----------
@@ -417,8 +479,8 @@ async function saveSchedule(guildId) {
 }
 
 function addMatch(guildId, week, homeIn, awayIn) {
-  const { canonical: home } = normalizeTeam(homeIn);
-  const { canonical: away } = normalizeTeam(awayIn);
+  const home = canonicalTeamForGuild(guildId, homeIn);
+  const away = canonicalTeamForGuild(guildId, awayIn);
   const data = SCHEDULES.get(guildId);
   if (!data.weeks[week]) data.weeks[week] = [];
   const exists = data.weeks[week].some(m => m.home === home && m.away === away);
@@ -621,6 +683,17 @@ const commands = [
     name: 'help',
     description: 'How to use GameDay Channels'
   },
+  {
+  name: 'team-reloc-list',
+  description: 'List all persistent team relocations',
+  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+},
+{
+  name: 'team-reloc-clear',
+  description: 'Remove a persistent relocation (or all)',
+  options: [{ type: 3, name: 'from_team', description: 'Specific from-team; omit to clear ALL', required: false }],
+  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+},
   {
     name: 'team-assign',
     description: 'Assign a user to a team (they will be pinged on match channels)',
@@ -841,6 +914,7 @@ client.once('clientReady', async () => {
     await loadSchedule(guildId);
     await loadTeamAssign(guildId);
     await loadConfig(guildId);
+    await loadTeamReloc(guildId);
 
     const loaded = SCHEDULES.get(guildId);
     if (!loaded || !loaded.source) {
@@ -868,6 +942,7 @@ client.on('interactionCreate', async (interaction) => {
   await loadSchedule(guildId);
   await loadTeamAssign(guildId);
   await loadConfig(guildId);
+  await loadTeamReloc(guildId);
 
   // ---------- Button Interactions (for /help) ----------
   if (interaction.isButton()) {
@@ -1000,7 +1075,7 @@ client.on('interactionCreate', async (interaction) => {
       const teamIn = interaction.options.getString('team', true);
       const user = interaction.options.getUser('user', true);
 
-      const team = normalizeTeam(teamIn).canonical;
+      const team = canonicalTeamForGuild(guildId, teamIn);
       const set = getAssignedSet(guildId, team);
       set.add(user.id);
       await saveTeamAssign(guildId);
@@ -1015,7 +1090,7 @@ client.on('interactionCreate', async (interaction) => {
       const teamIn = interaction.options.getString('team', true);
       const user = interaction.options.getUser('user', true);
 
-      const team = normalizeTeam(teamIn).canonical;
+      const team = canonicalTeamForGuild(guildId, teamIn);
       const set = getAssignedSet(guildId, team);
       const had = set.delete(user.id);
       await saveTeamAssign(guildId);
@@ -1068,7 +1143,7 @@ if (interaction.commandName === 'teams-clear-all') {
       const map = TEAM_ASSIGN.get(guildId) || {};
 
       if (teamIn) {
-        const team = normalizeTeam(teamIn).canonical;
+        const team = canonicalTeamForGuild(guildId, teamIn);
         const set = map[team] || new Set();
         const mentions = Array.from(set).map(id => `<@${id}>`).join(' ') || '_none_';
         await interaction.reply({ embeds: [buildInfoEmbed(`Team: ${team}`, mentions)], flags: MessageFlags.Ephemeral });
@@ -1117,6 +1192,47 @@ if (interaction.commandName === 'teams-clear-all') {
       }
       return;
     }
+
+    // /team-reloc-list
+if (interaction.commandName === 'team-reloc-list') {
+  await interaction.reply({
+    flags: MessageFlags.Ephemeral,
+    embeds: [buildInfoEmbed(
+      'Team Relocations',
+      Object.entries(TEAM_RELOC.get(guildId) || {}).length
+        ? Object.entries(TEAM_RELOC.get(guildId)).map(([k,v]) => `• **${k}** → **${v}**`).join('\n')
+        : '_none_'
+    )]
+  });
+  return;
+}
+
+// /team-reloc-clear
+if (interaction.commandName === 'team-reloc-clear') {
+  if (!(await requireProGuild(interaction, 'Relocation Clear'))) return;
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const fromIn = interaction.options.getString('from_team');
+  const reloc = TEAM_RELOC.get(guildId) || {};
+
+  if (!fromIn) {
+    TEAM_RELOC.set(guildId, {});
+    await saveTeamReloc(guildId);
+    await interaction.editReply({ embeds: [buildSuccessEmbed('Relocations Cleared', '🧹 Removed all persistent relocations.')] });
+    return;
+  }
+
+  const fromTeam = normalizeTeam(fromIn).canonical;
+  if (reloc[fromTeam]) {
+    delete reloc[fromTeam];
+    TEAM_RELOC.set(guildId, reloc);
+    await saveTeamReloc(guildId);
+    await interaction.editReply({ embeds: [buildSuccessEmbed('Relocation Removed', `🗑️ Deleted mapping for **${fromTeam}**.`)] });
+  } else {
+    await interaction.editReply({ embeds: [buildInfoEmbed('No Mapping', `ℹ️ No relocation found for **${fromTeam}**.`)] });
+  }
+  return;
+}
 
     // /uncomplete
     if (interaction.commandName === 'uncomplete') {
@@ -1259,7 +1375,7 @@ if (interaction.commandName === 'teams-clear-all') {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const teamIn = interaction.options.getString('team', true);
-  const team = normalizeTeam(teamIn).canonical;
+  const team = canonicalTeamForGuild(guildId, teamIn);
 
   const map = TEAM_ASSIGN.get(guildId) || {};
   if (!map[team] || !(map[team] instanceof Set) || map[team].size === 0) {
@@ -1479,6 +1595,92 @@ if (interaction.commandName === 'teams-clear-all') {
       return;
     }
   }
+
+  // /team-relocate
+if (interaction.commandName === 'team-relocate') {
+  if (!(await requireProGuild(interaction, 'Team Relocation'))) return;
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const fromIn   = interaction.options.getString('from_team', true);
+  const toIn     = interaction.options.getString('to_team', true);
+  const doRename = interaction.options.getBoolean('rename_channels') || false;
+
+  // Normalize *before* relocation, then resolve the destination fully
+  const fromTeamCanonical = normalizeTeam(fromIn).canonical;
+  const toTeamCanonical   = normalizeTeam(toIn).canonical;
+
+  // Safety: prevent cycles like A->B when B resolves to A
+  if (wouldCreateCycle(guildId, fromTeamCanonical, toTeamCanonical)) {
+    await interaction.editReply({ embeds: [buildErrorEmbed('Relocation would create a cycle. Choose a different target.')] });
+    return;
+  }
+
+  const toFinal = applyRelocation(guildId, toTeamCanonical); // follow existing reloc chains
+  rebaseRelocations(guildId, fromTeamCanonical, toFinal);    // update any X->from to X->toFinal
+
+  // Persist new mapping for this guild
+  const reloc = TEAM_RELOC.get(guildId) || {};
+  reloc[fromTeamCanonical] = toFinal;
+  TEAM_RELOC.set(guildId, reloc);
+  await saveTeamReloc(guildId);
+
+  // === Move assignment sets from old → new (as before) ===
+  const map = TEAM_ASSIGN.get(guildId) || {};
+  const fromSet = (map[fromTeamCanonical] instanceof Set) ? map[fromTeamCanonical] : new Set();
+  const toSet   = (map[toFinal]            instanceof Set) ? map[toFinal]            : new Set();
+
+  let moved = 0;
+  for (const uid of fromSet) if (!toSet.has(uid)) { toSet.add(uid); moved++; }
+  fromSet.clear();
+
+  map[fromTeamCanonical] = fromSet;
+  map[toFinal] = toSet;
+  TEAM_ASSIGN.set(guildId, map);
+  await saveTeamAssign(guildId);
+
+  // === Optional: rename existing channels that reference old slug ===
+  let renamed = 0, skipped = 0, errors = 0;
+  if (doRename) {
+    const fromSlug = safeChannelName(fromTeamCanonical);
+    const toSlug   = safeChannelName(toFinal);
+
+    for (const [, ch] of interaction.guild.channels.cache) {
+      if (ch.type !== ChannelType.GuildText) continue;
+
+      const hadFs = /-⚠️fs\b/.test(ch.name);
+      const { home, away } = parseHomeAwayFromChannel(ch.name);
+      if (!home || !away) { skipped++; continue; }
+
+      let needs = false;
+      let newHome = home;
+      let newAway = away;
+
+      if (home === fromSlug) { newHome = toSlug; needs = true; }
+      if (away === fromSlug) { newAway = toSlug; needs = true; }
+      if (!needs) { skipped++; continue; }
+
+      const newName = buildMatchName({ home: newHome, away: newAway, fairSim: hadFs });
+      try {
+        if (newName !== ch.name) {
+          await ch.setName(newName, `Relocated ${fromTeamCanonical} → ${toFinal}`);
+          renamed++;
+        } else {
+          skipped++;
+        }
+      } catch { errors++; }
+    }
+  }
+
+  const lines = [
+    `📍 Relocation set: **${fromTeamCanonical} → ${toFinal}** (persistent).`,
+    `✅ Moved **${moved}** assignment(s).`,
+    doRename ? `📝 Channels: renamed **${renamed}**, skipped **${skipped}**, errors **${errors}**.` : null
+  ].filter(Boolean).join('\n');
+
+  await interaction.editReply({ embeds: [buildSuccessEmbed('Team Relocated', lines)] });
+  return;
+}
 
   // ---------- Modal submit ----------
   if (interaction.isModalSubmit() && interaction.customId === 'bulkImportModal') {

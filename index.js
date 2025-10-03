@@ -1029,44 +1029,52 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.commandName === 'help') {
-      const embed = buildInfoEmbed(
-        '📖 GameDay Channels — Quick Guide',
-        [
-          '**Setup**',
-          '• `/setup-season` → choose **nfl_2025** (preloaded) or **manual**',
-          '• `/make-week` → create channels for all games in a week',
-          '• `/add-match` or `/manual-add` → add a game if needed',
-          '',
-          '**Teams & Tagging**',
-          '• `/team-assign team:<Team> user:@User` → tag coaches when weeks are created',
-          '• `/team-list` to see assignments',
-          '',
-          '**Finishing Games**',
-          '• `/complete` / `/uncomplete` → mark channels done',
-          '',
-          '**Bulk / Admin (Pro)**',
-          '• `/bulk-import` or `/import-schedule` → paste many games',
-          '• `/cleanup-week` → remove a full week category',
-          '',
-          '💎 `/upgrade` to unlock Pro features.'
-        ].join('\n')
-      );
+  const embed = buildInfoEmbed(
+    '📖 GameDay Channels — Command Guide',
+    [
+      '**Free Commands**',
+      '• `/setup-season` → choose **nfl_2025** or manual',
+      '• `/make-week week:<#>` → create channels (Weeks 1–18)',
+      '• `/add-match` or `/manual-add` → add a game',
+      '• `/team-assign` → assign a user to a team',
+      '• `/team-unassign` → remove a user from a team',
+      '• `/team-clear` → clear all users from one team',
+      '• `/team-list` → show assigned users',
+      '• `/help` → show this guide',
 
-      const row1 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('help-setup').setLabel('Setup').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('help-teams').setLabel('Teams').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('help-pro').setLabel('Pro').setStyle(ButtonStyle.Secondary)
-      );
+      '',
+      '**Pro Commands**',
+      '• `/bulk-import` → paste many games at once',
+      '• `/import-schedule` → import CSV lines',
+      '• `/cleanup-week` → delete an entire week category',
+      '• `/complete` / `/uncomplete` → mark game channels done',
+      '• `/fair-sim` → mark game channel as fair sim',
+      '• `/force-win` → mark force win (home or away)',
+      '• `/ping-coaches` → ping assigned coaches for a week',
+      '• `/teams-clear-all` → wipe all assignments',
+      '• `/team-relocate` → move assignments (persistent rename)',
+      '• `/message-week` → broadcast to all games in a week',
+      '• `/set-category-prefix` → customize category names',
+      '• `/debug-week` → see internal game counts',
+      '• `/check-pro` → check subscription status',
+      '• `/upgrade` → unlock Pro features',
+    ].join('\n')
+  );
 
-      const row2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setLabel('Upgrade to Pro').setStyle(ButtonStyle.Link).setURL(APP_DIR_URL),
-        new ButtonBuilder().setLabel('Invite the Bot').setStyle(ButtonStyle.Link).setURL(INVITE_URL)
-      );
+  const row1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('help-setup').setLabel('Setup').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('help-teams').setLabel('Teams').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('help-pro').setLabel('Pro').setStyle(ButtonStyle.Secondary)
+  );
 
-      await interaction.reply({ embeds: [embed], components: [row1, row2], flags: MessageFlags.Ephemeral });
-      return;
-    }
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setLabel('Upgrade to Pro').setStyle(ButtonStyle.Link).setURL(APP_DIR_URL),
+    new ButtonBuilder().setLabel('Invite the Bot').setStyle(ButtonStyle.Link).setURL(INVITE_URL)
+  );
 
+  await interaction.reply({ embeds: [embed], components: [row1, row2], flags: MessageFlags.Ephemeral });
+  return;
+}
   
 
     // /team-assign
@@ -1701,7 +1709,7 @@ if (interaction.commandName === 'team-relocate') {
   await interaction.editReply({ embeds: [buildSuccessEmbed('Team Relocated', lines)] });
   return;
 }
-
+  }
   // ---------- Modal submit ----------
   if (interaction.isModalSubmit() && interaction.customId === 'bulkImportModal') {
     if (!(await requireProGuild(interaction, 'Bulk Import'))) return;

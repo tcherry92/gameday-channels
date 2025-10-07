@@ -499,16 +499,18 @@ async function makeWeek(interaction, week, role) {
   const cat = await getOrCreateCategory(interaction.guild, week, overwrites);
   const created = [];
   for (const { home, away } of games) {
-    const chName = `${home}-vs-${away}`;
-    const ch = await getOrCreateTextChannel(interaction.guild, chName, cat.id);
+  const h = canonicalTeamForGuild(guildId, home);   // apply relocation NOW
+  const a = canonicalTeamForGuild(guildId, away);
 
-    // Assigned users
-    const assignMap = TEAM_ASSIGN.get(guildId) || {};
-    const homeSet = assignMap[home] || new Set();
-    const awaySet = assignMap[away] || new Set();
-    const homeIds = Array.from(homeSet);
-    const awayIds = Array.from(awaySet);
+  const chName = `${h}-vs-${a}`;
+  const ch = await getOrCreateTextChannel(interaction.guild, chName, cat.id);
 
+  const assignMap = TEAM_ASSIGN.get(guildId) || {};
+  const homeSet = assignMap[h] || new Set();
+  const awaySet = assignMap[a] || new Set();
+  const homeIds = Array.from(homeSet);
+  const awayIds = Array.from(awaySet);
+    
     // If the category is private (role provided), let assigned users in
     if (role && (homeIds.length || awayIds.length)) {
       for (const uid of new Set([...homeIds, ...awayIds])) {
@@ -520,21 +522,17 @@ async function makeWeek(interaction, week, role) {
 
     // Post kickoff message with controlled mentions
     const mentions = [...new Set([...homeIds, ...awayIds])];
-    const allowMentions = { parse: [], users: mentions };
-    const lines = [
-      `**${home} vs ${away}**`,
-      homeIds.length ? `Home coaches: ${homeIds.map(id=>`<@${id}>`).join(' ')}` : '',
-      awayIds.length ? `Away coaches: ${awayIds.map(id=>`<@${id}>`).join(' ')}` : ''
-    ].filter(Boolean).join('\n');
+  const allowMentions = { parse: [], users: mentions };
+  const lines = [
+    `**${h} vs ${a}**`,
+    homeIds.length ? `Home coaches: ${homeIds.map(id=>`<@${id}>`).join(' ')}` : '',
+    awayIds.length ? `Away coaches: ${awayIds.map(id=>`<@${id}>`).join(' ')}` : ''
+  ].filter(Boolean).join('\n');
 
-    try {
-      if (lines) await ch.send({ content: lines, allowedMentions: allowMentions });
-    } catch {}
-
-    created.push(`#${safeChannelName(chName)}`);
-  }
-  const desc = `✅ Week ${week} ready.\n${created.join(', ')}`;
-  await interaction.editReply({ embeds: [buildSuccessEmbed('Week Created', desc)] });
+  try {
+    if (lines) await ch.send({ content: lines, allowedMentions: allowMentions });
+  } catch {}
+  created.push(`#${safeChannelName(chName)}`);
 }
 
 // ---------- Preload from bundled local file ----------
@@ -712,6 +710,16 @@ const commands = [
     ],
     default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
   },
+  {
+  name: 'team-relocate',
+  description: 'Persistently rename a team for this guild (optionally rename existing channels)',
+  options: [
+    { type: 3, name: 'from_team', description: 'Existing team name or abbrev', required: true },
+    { type: 3, name: 'to_team', description: 'New team name to use going forward', required: true },
+    { type: 5, name: 'rename_channels', description: 'Also rename existing game channels', required: false },
+  ],
+  default_member_permissions: PermissionFlagsBits.ManageChannels.toString()
+},
   {
   name: 'teams-clear-all',
   description: 'Remove all users from ALL teams (bulk reset)',

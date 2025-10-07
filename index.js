@@ -495,22 +495,26 @@ async function makeWeek(interaction, week, role) {
     await interaction.editReply({ embeds: [buildErrorEmbed(`⚠️ No games found for Week ${week}. Add with /manual-add or /add-match.`)] });
     return;
   }
+
   const overwrites = buildOverwrites(interaction.guild, role);
   const cat = await getOrCreateCategory(interaction.guild, week, overwrites);
   const created = [];
+
   for (const { home, away } of games) {
-  const h = canonicalTeamForGuild(guildId, home);   // apply relocation NOW
-  const a = canonicalTeamForGuild(guildId, away);
+    // Apply relocations at use time
+    const h = canonicalTeamForGuild(guildId, home);
+    const a = canonicalTeamForGuild(guildId, away);
 
-  const chName = `${h}-vs-${a}`;
-  const ch = await getOrCreateTextChannel(interaction.guild, chName, cat.id);
+    const chName = `${h}-vs-${a}`;
+    const ch = await getOrCreateTextChannel(interaction.guild, chName, cat.id);
 
-  const assignMap = TEAM_ASSIGN.get(guildId) || {};
-  const homeSet = assignMap[h] || new Set();
-  const awaySet = assignMap[a] || new Set();
-  const homeIds = Array.from(homeSet);
-  const awayIds = Array.from(awaySet);
-    
+    // Assigned users
+    const assignMap = TEAM_ASSIGN.get(guildId) || {};
+    const homeSet = assignMap[h] || new Set();
+    const awaySet = assignMap[a] || new Set();
+    const homeIds = Array.from(homeSet);
+    const awayIds = Array.from(awaySet);
+
     // If the category is private (role provided), let assigned users in
     if (role && (homeIds.length || awayIds.length)) {
       for (const uid of new Set([...homeIds, ...awayIds])) {
@@ -522,17 +526,22 @@ async function makeWeek(interaction, week, role) {
 
     // Post kickoff message with controlled mentions
     const mentions = [...new Set([...homeIds, ...awayIds])];
-  const allowMentions = { parse: [], users: mentions };
-  const lines = [
-    `**${h} vs ${a}**`,
-    homeIds.length ? `Home coaches: ${homeIds.map(id=>`<@${id}>`).join(' ')}` : '',
-    awayIds.length ? `Away coaches: ${awayIds.map(id=>`<@${id}>`).join(' ')}` : ''
-  ].filter(Boolean).join('\n');
+    const allowMentions = { parse: [], users: mentions };
+    const lines = [
+      `**${h} vs ${a}**`,
+      homeIds.length ? `Home coaches: ${homeIds.map(id => `<@${id}>`).join(' ')}` : '',
+      awayIds.length ? `Away coaches: ${awayIds.map(id => `<@${id}>`).join(' ')}` : ''
+    ].filter(Boolean).join('\n');
 
-  try {
-    if (lines) await ch.send({ content: lines, allowedMentions: allowMentions });
-  } catch {}
-  created.push(`#${safeChannelName(chName)}`);
+    try {
+      if (lines) await ch.send({ content: lines, allowedMentions: allowMentions });
+    } catch {}
+
+    created.push(`#${safeChannelName(chName)}`);
+  }
+
+  const desc = `✅ Week ${week} ready.\n${created.join(', ')}`;
+  await interaction.editReply({ embeds: [buildSuccessEmbed('Week Created', desc)] });
 }
 
 // ---------- Preload from bundled local file ----------
